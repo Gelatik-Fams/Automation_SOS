@@ -1,0 +1,6 @@
+docs/
+_pycache_
+input
+*.csv
+*.xlsx
+*.pyc
