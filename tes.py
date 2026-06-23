@@ -1,20 +1,27 @@
 import pandas as pd
 import gspread
 import time
+import os
+import glob
 from google.oauth2.service_account import Credentials
 from watchdog.observers.polling import PollingObserver
 from watchdog.events import FileSystemEventHandler
 
-CSV_FILE = 'Report Product - Januari 2024.csv'
+# ── Warna conditional formatting ──────────────────────────────
+GREEN_BG = {'red': 0.714, 'green': 0.843, 'blue': 0.659}
+RED_BG   = {'red': 0.918, 'green': 0.600, 'blue': 0.600}
 
-MONTH_ORDER = ['January', 'February', 'March', 'April', 'May', 'June',
-               'July', 'August', 'September', 'October', 'November', 'December']
-
+# ── Metrik detail untuk STORE DETAIL ──────────────────────────
 METRIC_LABELS = ['Indofood', 'Kompetitor', 'Total Facing', 'SOS%', 'Store Count']
-N_METRICS     = len(METRIC_LABELS)  # 5 kolom per bulan
+N_METRICS     = len(METRIC_LABELS)
 
+WEEK_ORDER = ['W1', 'W2', 'W3', 'W4', 'W5']
+
+
+# ─────────────────────────── HELPER ────────────────────────────
 
 def col_letter(n):
+    """0-indexed → huruf kolom (0=A, 25=Z, 26=AA, ...)."""
     result = ''
     n += 1
     while n > 0:
@@ -23,100 +30,105 @@ def col_letter(n):
     return result
 
 
+def is_competitor(series):
+    return series.astype(str).str.contains('COMPETITOR', case=False, na=False)
+
+
+def sort_key_period(label):
+    """Sort 'Jan 25', 'Feb 25' dst. secara kronologis."""
+    MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+              'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    parts = str(label).split()
+    if len(parts) == 2:
+        m = MONTHS.index(parts[0]) if parts[0] in MONTHS else 99
+        y = int(parts[1]) if parts[1].isdigit() else 9999
+        return (y, m)
+    return (9999, 99)
+
+
+def calc_sos(df, groupby_cols):
+    """Hitung SOS% untuk sembarang groupby. Return df dengan fi, fk, total, SOS%."""
+    df_i = df[~is_competitor(df['Product Code'])]
+    df_k = df[ is_competitor(df['Product Code'])]
+
+    fi = df_i.groupby(groupby_cols)['Facing'].sum().reset_index().rename(columns={'Facing': 'fi'})
+    fk = df_k.groupby(groupby_cols)['Facing'].sum().reset_index().rename(columns={'Facing': 'fk'})
+
+    merged = fi.merge(fk, on=groupby_cols, how='outer').fillna(0)
+    merged['total'] = merged['fi'] + merged['fk']
+    merged['SOS%']  = (
+        merged['fi'] / merged['total'].replace(0, float('nan')) * 100
+    ).round(1).fillna(0)
+    return merged
+
+
 def hitung_sos(df, groupby_cols):
-    g = groupby_cols + ['Month']
+    """Untuk STORE DETAIL — kolom facing_indofood/kompetitor/SOS_% per Period."""
+    g = groupby_cols + ['Period']
+    df_i = df[~is_competitor(df['Product Code'])]
+    df_k = df[ is_competitor(df['Product Code'])]
 
-    df_indofood   = df[~df['Product Code'].astype(str).str.contains('COMPETITOR', case=False, na=False)]
-    df_kompetitor = df[ df['Product Code'].astype(str).str.contains('COMPETITOR', case=False, na=False)]
-
-    fi = df_indofood.groupby(g)['Facing'].sum().reset_index().rename(columns={'Facing': 'facing_indofood'})
-    fk = df_kompetitor.groupby(g)['Facing'].sum().reset_index().rename(columns={'Facing': 'facing_kompetitor'})
+    fi = df_i.groupby(g)['Facing'].sum().reset_index().rename(columns={'Facing': 'facing_indofood'})
+    fk = df_k.groupby(g)['Facing'].sum().reset_index().rename(columns={'Facing': 'facing_kompetitor'})
 
     merged = fi.merge(fk, on=g, how='outer').fillna(0)
     merged['total_facing'] = merged['facing_indofood'] + merged['facing_kompetitor']
     merged['SOS_%'] = (
         merged['facing_indofood'] / merged['total_facing'].replace(0, float('nan')) * 100
-    ).round(2).fillna(0)
-
+    ).round(1).fillna(0)
     return merged
 
 
-def buat_section_table(df, index_col, months):
-    sos_data   = hitung_sos(df, [index_col])
-    store_data = df.groupby([index_col, 'Month'])['Store Code'].nunique().reset_index()
-    store_data.rename(columns={'Store Code': 'store_count'}, inplace=True)
+def get_target(targets, dim, nama):
+    """Cari target SOS% — fallback ke DEFAULT lalu 65."""
+    dim_up  = dim.upper()
+    nama_up = str(nama).upper()
+    return targets.get((dim_up, nama_up),
+           targets.get((dim_up, 'DEFAULT'), 65.0))
 
-    ordered_months = [m for m in months if m in sos_data['Month'].unique()]
 
-    # Pivot semua metrik
-    def pivot(col, agg):
-        p = sos_data.pivot_table(index=index_col, columns='Month', values=col, aggfunc=agg, fill_value=0)
-        return p.reindex(columns=ordered_months, fill_value=0)
+def calc_compliance(df, index_col, targets, dim_label):
+    """
+    Hitung STORE COVERAGE, AKTUAL COMPLIANCE, % COMPLIANCE per nilai index_col.
+    Metrik dihitung atas semua period (kumulatif):
+      - STORE COVERAGE  = total toko unik yang dikunjungi
+      - AKTUAL COMPLIANCE = toko dengan SOS% kumulatif >= target
+      - % COMPLIANCE   = aktual / coverage × 100
+    Return: dict {str(nilai): (coverage, aktual, pct_str)}
+    """
+    store_sos = calc_sos(df, [index_col, 'Store Code'])
 
-    pv_fi  = pivot('facing_indofood',   'sum')
-    pv_fk  = pivot('facing_kompetitor', 'sum')
-    pv_ft  = pivot('total_facing',      'sum')
-    pv_sos = pivot('SOS_%',             'mean')
+    result = {}
+    for idx in store_sos[index_col].unique():
+        data     = store_sos[store_sos[index_col] == idx]
+        target   = get_target(targets, dim_label, idx)
+        coverage = len(data)
+        aktual   = len(data[data['SOS%'] >= target])
+        pct      = round(aktual / coverage * 100, 1) if coverage > 0 else 0
+        result[str(idx).upper()] = (coverage, aktual, pct)
 
-    sc = store_data.pivot_table(index=index_col, columns='Month', values='store_count', aggfunc='sum', fill_value=0)
-    sc = sc.reindex(columns=ordered_months, fill_value=0)
+    return result
 
-    # Header baris 1 — nama bulan (tiap bulan span N_METRICS kolom)
-    header1 = [index_col]
-    for m in ordered_months:
-        header1 += [m] + [''] * (N_METRICS - 1)
-    header1 += ['TOTAL'] + [''] * (N_METRICS - 1)
 
-    # Header baris 2 — nama metrik per bulan
-    header2 = [''] + METRIC_LABELS * (len(ordered_months) + 1)
+# ─────────────────────────── FORMATTING ────────────────────────
 
-    rows = [header1, header2]
-
-    # Baris data
-    for idx in pv_fi.index:
-        row      = [str(idx)]
-        tot_fi   = tot_fk = tot_ft = tot_sc = 0
-
-        for m in ordered_months:
-            fi  = int(round(float(pv_fi.loc[idx, m])))
-            fk  = int(round(float(pv_fk.loc[idx, m])))
-            ft  = int(round(float(pv_ft.loc[idx, m])))
-            sos = round(float(pv_sos.loc[idx, m]), 2)
-            sc_val = int(sc.loc[idx, m]) if idx in sc.index else 0
-
-            row    += [fi, fk, ft, sos, sc_val]
-            tot_fi += fi
-            tot_fk += fk
-            tot_ft += ft
-            tot_sc += sc_val
-
-        tot_sos = round(tot_fi / tot_ft * 100, 2) if tot_ft > 0 else 0
-        row += [tot_fi, tot_fk, tot_ft, tot_sos, tot_sc]
-        rows.append(row)
-
-    # Grand Total
-    grand    = ['GRAND TOTAL']
-    gt_fi    = gt_fk = gt_ft = gt_sc = 0
-
-    for m in ordered_months:
-        fi  = int(round(pv_fi[m].sum()))
-        fk  = int(round(pv_fk[m].sum()))
-        ft  = int(round(pv_ft[m].sum()))
-        sos = round(fi / ft * 100, 2) if ft > 0 else 0
-        sc_val = int(sc[m].sum()) if m in sc.columns else 0
-
-        grand  += [fi, fk, ft, sos, sc_val]
-        gt_fi  += fi
-        gt_fk  += fk
-        gt_ft  += ft
-        gt_sc  += sc_val
-
-    gt_sos = round(gt_fi / gt_ft * 100, 2) if gt_ft > 0 else 0
-    grand += [gt_fi, gt_fk, gt_ft, gt_sos, gt_sc]
-    rows.append(grand)
-
-    num_cols = len(header1)
-    return rows, num_cols
+def hapus_semua_chart(spreadsheet, ws_id):
+    """Hapus semua chart/embedded object dari sheet sebelum nulis data baru."""
+    try:
+        meta = spreadsheet.fetch_sheet_metadata()
+        for sheet in meta.get('sheets', []):
+            if sheet['properties']['sheetId'] == ws_id:
+                charts = sheet.get('charts', [])
+                if charts:
+                    requests = [
+                        {'deleteEmbeddedObject': {'objectId': c['chartId']}}
+                        for c in charts
+                    ]
+                    spreadsheet.batch_update({'requests': requests})
+                    print(f'[INFO] {len(charts)} chart dihapus dari sheet.')
+                break
+    except Exception as e:
+        print(f'Hapus chart error (diabaikan): {e}')
 
 
 def hapus_semua_formatting(ws, total_rows, total_cols):
@@ -130,187 +142,448 @@ def hapus_semua_formatting(ws, total_rows, total_cols):
 
 def terapkan_filter(ws, header_row):
     try:
-        ws.spreadsheet.batch_update({
-            'requests': [{
-                'setBasicFilter': {
-                    'filter': {
-                        'range': {
-                            'sheetId'        : ws.id,
-                            'startRowIndex'  : header_row - 1,
-                            'startColumnIndex': 0,
-                        }
-                    }
-                }
-            }]
-        })
+        ws.spreadsheet.batch_update({'requests': [{
+            'setBasicFilter': {'filter': {'range': {
+                'sheetId': ws.id, 'startRowIndex': header_row - 1, 'startColumnIndex': 0,
+            }}}
+        }]})
     except Exception as e:
         print(f'Filter error (diabaikan): {e}')
 
 
-def buat_dashboard(ws, df):
-    ws.clear()
+def api_retry(fn, *args, **kwargs):
+    """Panggil fn(*args, **kwargs) dengan retry otomatis kalau kena 429 rate limit."""
+    for wait in [0, 30, 60, 90]:
+        if wait:
+            print(f'[WARNING] Rate limit (429), tunggu {wait}s...')
+            time.sleep(wait)
+        try:
+            return fn(*args, **kwargs)
+        except gspread.exceptions.APIError as e:
+            if '429' not in str(e):
+                raise
+    raise RuntimeError('Gagal setelah 4x retry rate limit.')
 
-    semua_bulan = [m for m in MONTH_ORDER if m in df['Month'].unique()]
 
-    levels = [
-        ('REGION',           'Region'),
-        ('AREA',             'Area'),
-        ('CHANNEL',          'Channel'),
-        ('CATEGORY CHANNEL', 'Category Channel'),
-    ]
+def hapus_conditional_format(spreadsheet, ws_id):
+    """Hapus semua conditional format rule sekaligus (satu batch)."""
+    try:
+        meta = spreadsheet.fetch_sheet_metadata()
+        for sheet in meta.get('sheets', []):
+            if sheet['properties']['sheetId'] == ws_id:
+                n = len(sheet.get('conditionalFormats', []))
+                if n == 0:
+                    return
+                requests = [
+                    {'deleteConditionalFormatRule': {'sheetId': ws_id, 'index': 0}}
+                    for _ in range(n)
+                ]
+                api_retry(spreadsheet.batch_update, {'requests': requests})
+                return
+    except Exception:
+        pass
 
-    all_rows       = []
-    fmt_info       = []
-    ordered_months = semua_bulan  # akan di-filter di buat_section_table
 
-    for label, col in levels:
-        table_rows, num_cols = buat_section_table(df, col, semua_bulan)
+def terapkan_conditional_format(spreadsheet, ws_id, data_start_row, data_end_row,
+                                 sos_col_indices, target_col_idx):
+    """Green jika SOS% >= TARGET, merah jika di bawah. sos_col_indices: list 0-indexed."""
+    tl = col_letter(target_col_idx)
+    r  = data_start_row
 
-        title_row_idx   = len(all_rows) + 1
-        all_rows.append([f'DASHBOARD BY {label}'])
+    requests = []
+    for col_idx in sos_col_indices:
+        sl = col_letter(col_idx)
+        rng = {
+            'sheetId'         : ws_id,
+            'startRowIndex'   : data_start_row - 1,
+            'endRowIndex'     : data_end_row,
+            'startColumnIndex': col_idx,
+            'endColumnIndex'  : col_idx + 1,
+        }
+        requests += [
+            {'addConditionalFormatRule': {'rule': {
+                'ranges': [rng],
+                'booleanRule': {
+                    'condition': {'type': 'CUSTOM_FORMULA',
+                                  'values': [{'userEnteredValue': f'={sl}{r}>=${tl}{r}'}]},
+                    'format': {'backgroundColor': GREEN_BG}
+                }
+            }, 'index': 0}},
+            {'addConditionalFormatRule': {'rule': {
+                'ranges': [rng],
+                'booleanRule': {
+                    'condition': {'type': 'CUSTOM_FORMULA',
+                                  'values': [{'userEnteredValue': f'=ISNUMBER({sl}{r})*({sl}{r}<${tl}{r})'}]},
+                    'format': {'backgroundColor': RED_BG}
+                }
+            }, 'index': 1}},
+        ]
+    try:
+        spreadsheet.batch_update({'requests': requests})
+    except Exception as e:
+        print(f'Conditional format error: {e}')
 
-        header1_row_idx = len(all_rows) + 1
-        header2_row_idx = len(all_rows) + 2
-        all_rows.extend(table_rows)
-        grand_total_idx = len(all_rows)
 
-        fmt_info.append({
-            'title_row'      : title_row_idx,
-            'header1_row'    : header1_row_idx,
-            'header2_row'    : header2_row_idx,
-            'grand_total_row': grand_total_idx,
-            'num_cols'       : num_cols,
-            'label'          : label,
-        })
+# ─────────────────────────── TARGET DARI DASHBOARD ─────────────
 
-        all_rows.append([])
-        all_rows.append([])
+def baca_target_dari_dashboard(ws):
+    """
+    Baca TARGET (kolom B) dari dashboard sebelum di-clear.
+    User bisa edit langsung di kolom TARGET — dipertahankan saat script update.
+    """
+    try:
+        all_vals = ws.get_all_values()
+    except Exception:
+        return {}
 
-    total_rows = len(all_rows)
-    total_cols = max(info['num_cols'] for info in fmt_info)
+    targets    = {}
+    current_dim = None
+    skip_count  = 0
 
-    # Hapus semua formatting lama dulu sebelum tulis baru
-    hapus_semua_formatting(ws, total_rows + 10, total_cols + 5)
+    for row in all_vals:
+        if not row or not row[0].strip():
+            current_dim = None; skip_count = 0
+            continue
 
-    ws.update('A1', all_rows)
+        cell_a = row[0].strip()
+
+        if cell_a.startswith('SOS% BY '):
+            current_dim = cell_a.replace('SOS% BY ', '').strip()
+            skip_count  = 2
+            continue
+
+        if skip_count > 0:
+            skip_count -= 1
+            continue
+
+        if current_dim and len(row) >= 2:
+            nama    = cell_a.upper()
+            tgt_str = row[1].strip()
+            if nama and tgt_str:
+                try:
+                    targets[(current_dim, nama)] = float(
+                        tgt_str.replace('%', '').replace(',', '.')
+                    )
+                except ValueError:
+                    pass
+
+    return targets
+
+
+# ─────────────────────────── BANGUN TABEL SOS ──────────────────
+
+def buat_tabel_sos_monthly(df, index_col, dim_label, semua_period, targets,
+                            compliance_map=None):
+    """
+    Tabel SOS% per bulan dengan kolom Indofood | Kompetitor | Total | SOS% per period.
+    [index | TARGET | ←Jan 25→ | ←Feb 25→ | ... | AVG | STORE COV. | AKTUAL | %]
+                      fi fk tot %   fi fk tot %
+    """
+    df_i = df[~is_competitor(df['Product Code'])]
+    df_k = df[ is_competitor(df['Product Code'])]
+
+    sos_monthly = calc_sos(df, [index_col, 'Period'])
+    ordered_periods = [p for p in semua_period if p in sos_monthly['Period'].unique()]
+    n = len(ordered_periods)
+
+    # ── Header ──
+    header1 = [index_col, 'TARGET']
+    header2 = ['', '']
+    for p in ordered_periods:
+        header1 += [p, '', '', '']
+        header2 += ['Indofood', 'Kompetitor', 'Total', 'SOS%']
+    header1 += ['AVG', 'STORE COV.', 'AKTUAL', '%']
+    header2 += ['', '', '', '']
+
+    # ── Precompute fi/fk per (index_col, Period) ──
+    fi_grp = df_i.groupby([index_col, 'Period'])['Facing'].sum()
+    fk_grp = df_k.groupby([index_col, 'Period'])['Facing'].sum()
+
+    all_indices = sos_monthly[index_col].unique()
+
+    # ── Baris data ──
+    data_rows = []
+    for idx in all_indices:
+        target_val  = get_target(targets, dim_label, idx)
+        row         = [str(idx), target_val]
+        monthly_sos = []
+
+        for p in ordered_periods:
+            fi  = int(round(fi_grp.get((idx, p), 0)))
+            fk  = int(round(fk_grp.get((idx, p), 0)))
+            tot = fi + fk
+            sos = round(fi / tot * 100, 1) if tot > 0 else 0
+            row += [fi, fk, tot, sos]
+            monthly_sos.append(sos)
+
+        avg = round(sum(monthly_sos) / len(monthly_sos), 1) if monthly_sos else 0
+        row.append(avg)
+
+        cdata = compliance_map.get(str(idx).upper(), (0, 0, 0)) if compliance_map else (0, 0, 0)
+        row += list(cdata)
+        data_rows.append(row)
+
+    # ── Grand Total ──
+    grand    = ['GRAND TOTAL', get_target(targets, dim_label, 'GRAND TOTAL')]
+    gt_sos   = []
+    for p in ordered_periods:
+        fi  = int(round(df_i[df_i['Period'] == p]['Facing'].sum()))
+        fk  = int(round(df_k[df_k['Period'] == p]['Facing'].sum()))
+        tot = fi + fk
+        sos = round(fi / tot * 100, 1) if tot > 0 else 0
+        grand += [fi, fk, tot, sos]
+        gt_sos.append(sos)
+
+    grand.append(round(sum(gt_sos) / len(gt_sos), 1) if gt_sos else 0)
+    if compliance_map:
+        gt_cov = sum(v[0] for v in compliance_map.values())
+        gt_akt = sum(v[1] for v in compliance_map.values())
+        gt_pct = round(gt_akt / gt_cov * 100, 1) if gt_cov > 0 else 0
+        grand += [gt_cov, gt_akt, gt_pct]
+    else:
+        grand += [0, 0, 0]
+
+    rows     = [header1, header2] + data_rows + [grand]
+    num_cols = len(header1)
+
+    # Kolom SOS% = kolom ke-5,9,13,... (0-indexed: 2+3, 2+7, ...) + AVG (2+4n)
+    sos_cols = [2 + 4*i + 3 for i in range(n)] + [2 + 4*n]
+
+    meta = {
+        'num_cols'      : num_cols,
+        'sos_col_indices': sos_cols,
+        'target_col_idx' : 1,
+    }
+    return rows, meta
+
+
+def buat_tabel_channel_account(df, semua_period, targets):
+    """
+    Tabel SOS% Channel × Account dengan subtotal per Channel.
+    [Channel | Account | TARGET | ←Jan 25→ | ←Feb 25→ | ... | AVG | COV | AKTUAL | %]
+                                   fi fk tot %  fi fk tot %
+    """
+    sos_monthly = calc_sos(df, ['Channel', 'Account', 'Period'])
+    ordered_periods = [p for p in semua_period if p in sos_monthly['Period'].unique()]
+    n = len(ordered_periods)
+
+    df_i = df[~is_competitor(df['Product Code'])]
+    df_k = df[ is_competitor(df['Product Code'])]
+
+    # Precompute fi/fk per (Channel, Account, Period)
+    fi_grp = df_i.groupby(['Channel', 'Account', 'Period'])['Facing'].sum()
+    fk_grp = df_k.groupby(['Channel', 'Account', 'Period'])['Facing'].sum()
+
+    header1 = ['CHANNEL', 'ACCOUNT', 'TARGET']
+    header2 = ['', '', '']
+    for p in ordered_periods:
+        header1 += [p, '', '', '']
+        header2 += ['Indofood', 'Kompetitor', 'Total', 'SOS%']
+    header1 += ['AVG', 'STORE COV.', 'AKTUAL', '%']
+    header2 += ['', '', '', '']
+
+    store_sos = calc_sos(df, ['Channel', 'Account', 'Store Code'])
 
     try:
-        from gspread_formatting import format_cell_ranges, CellFormat, Color, TextFormat
-
-        BLUE_DARK   = Color(0.13, 0.37, 0.62)
-        BLUE_MED    = Color(0.27, 0.51, 0.71)
-        BLUE_LIGHT  = Color(0.64, 0.76, 0.89)
-        GREY        = Color(0.85, 0.85, 0.85)
-        WHITE       = Color(1, 1, 1)
-
-        requests = []
-        for info in fmt_info:
-            ec = col_letter(info['num_cols'] - 1)
-            tr = info['title_row']
-            h1 = info['header1_row']
-            h2 = info['header2_row']
-            gr = info['grand_total_row']
-
-            requests += [
-                (f'A{tr}:{ec}{tr}', CellFormat(
-                    backgroundColor=GREY,
-                    textFormat=TextFormat(bold=True, fontSize=11)
-                )),
-                (f'A{h1}:{ec}{h1}', CellFormat(
-                    backgroundColor=BLUE_DARK,
-                    textFormat=TextFormat(bold=True, foregroundColor=WHITE)
-                )),
-                (f'A{h2}:{ec}{h2}', CellFormat(
-                    backgroundColor=BLUE_MED,
-                    textFormat=TextFormat(bold=True, foregroundColor=WHITE)
-                )),
-                (f'A{gr}:{ec}{gr}', CellFormat(
-                    backgroundColor=BLUE_LIGHT,
-                    textFormat=TextFormat(bold=True)
-                )),
-            ]
-
-        format_cell_ranges(ws, requests)
-        print('Formatting berhasil!')
-
-    except ImportError:
-        print('Install gspread-formatting: pip install gspread-formatting')
+        sm_pivot = sos_monthly.pivot_table(
+            index=['Channel', 'Account'], columns='Period', values='SOS%',
+            aggfunc='mean', fill_value=0)
     except Exception as e:
-        print(f'Formatting error (diabaikan): {e}')
+        print(f'Channel×Account pivot error: {e}')
+        num_cols = len(header1)
+        return [header1, header2], {
+            'num_cols': num_cols,
+            'sos_col_indices': [3 + 4*i + 3 for i in range(n)] + [3 + 4*n],
+            'target_col_idx': 2,
+        }
 
-    tambah_chart(ws.spreadsheet, ws, fmt_info, ordered_months)
+    channels_order = []
+    ch_account_map = {}
+    for (ch, acc) in list(sm_pivot.index):
+        if ch not in ch_account_map:
+            ch_account_map[ch] = []
+            channels_order.append(ch)
 
+        target_val  = get_target(targets, 'CHANNEL-ACCOUNT', f'{ch} - {acc}')
+        row         = [str(ch), str(acc), target_val]
+        monthly_sos = []
 
-def buat_store_detail(ws, df):
-    ws.clear()
+        for p in ordered_periods:
+            fi  = int(round(fi_grp.get((ch, acc, p), 0)))
+            fk  = int(round(fk_grp.get((ch, acc, p), 0)))
+            tot = fi + fk
+            sos = round(fi / tot * 100, 1) if tot > 0 else 0
+            row += [fi, fk, tot, sos]
+            monthly_sos.append(sos)
 
-    semua_bulan  = [m for m in MONTH_ORDER if m in df['Month'].unique()]
-    index_cols   = ['Region', 'Area', 'Store Name']
+        avg = round(sum(monthly_sos) / len(monthly_sos), 1) if monthly_sos else 0
+        row.append(avg)
 
-    sos_data     = hitung_sos(df, index_cols)
-    store_data   = df.groupby(index_cols + ['Month'])['Store Code'].nunique().reset_index()
-    store_data.rename(columns={'Store Code': 'store_count'}, inplace=True)
+        acc_sos  = store_sos[(store_sos['Channel'] == ch) & (store_sos['Account'] == acc)]
+        coverage = len(acc_sos)
+        aktual   = len(acc_sos[acc_sos['SOS%'] >= target_val])
+        pct      = round(aktual / coverage * 100, 1) if coverage > 0 else 0
+        row += [coverage, aktual, pct]
+        ch_account_map[ch].append(row)
 
-    ordered_months = [m for m in semua_bulan if m in sos_data['Month'].unique()]
+    # ── Susun baris: account rows + subtotal per channel ──
+    # Precompute fi/fk per (Channel, Period) untuk subtotal
+    fi_ch = df_i.groupby(['Channel', 'Period'])['Facing'].sum()
+    fk_ch = df_k.groupby(['Channel', 'Period'])['Facing'].sum()
 
-    def make_pivot(data, val, agg):
-        p = data.pivot_table(index=index_cols, columns='Month', values=val, aggfunc=agg, fill_value=0)
-        return p.reindex(columns=ordered_months, fill_value=0)
+    result_rows = []
+    for ch in channels_order:
+        acc_rows = ch_account_map[ch]
+        result_rows.extend(acc_rows)
 
-    pv_fi  = make_pivot(sos_data,   'facing_indofood',   'sum')
-    pv_fk  = make_pivot(sos_data,   'facing_kompetitor', 'sum')
-    pv_ft  = make_pivot(sos_data,   'total_facing',      'sum')
-    pv_sos = make_pivot(sos_data,   'SOS_%',             'mean')
-    pv_sc  = make_pivot(store_data, 'store_count',       'sum')
+        sub_row  = [f'{ch} TOTAL', '', '']
+        sub_sos  = []
+        for p in ordered_periods:
+            fi  = int(round(fi_ch.get((ch, p), 0)))
+            fk  = int(round(fk_ch.get((ch, p), 0)))
+            tot = fi + fk
+            sos = round(fi / tot * 100, 1) if tot > 0 else 0
+            sub_row += [fi, fk, tot, sos]
+            sub_sos.append(sos)
 
-    n_idx    = len(index_cols)
-    header1  = index_cols[:]
-    header2  = [''] * n_idx
-    for m in ordered_months:
-        header1 += [m] + [''] * (N_METRICS - 1)
-        header2 += METRIC_LABELS
-    header1 += ['TOTAL'] + [''] * (N_METRICS - 1)
-    header2 += METRIC_LABELS
+        sub_avg = round(sum(sub_sos) / len(sub_sos), 1) if sub_sos else 0
+        sub_row.append(sub_avg)
+        sub_cov = sum(r[-3] for r in acc_rows)
+        sub_akt = sum(r[-2] for r in acc_rows)
+        sub_pct = round(sub_akt / sub_cov * 100, 1) if sub_cov > 0 else 0
+        sub_row += [sub_cov, sub_akt, sub_pct]
+        result_rows.append(sub_row)
 
-    table_rows = [header1, header2]
+    # ── Grand Total ──
+    grand  = ['GRAND TOTAL', '', '']
+    gt_sos = []
+    for p in ordered_periods:
+        fi  = int(round(df_i[df_i['Period'] == p]['Facing'].sum()))
+        fk  = int(round(df_k[df_k['Period'] == p]['Facing'].sum()))
+        tot = fi + fk
+        sos = round(fi / tot * 100, 1) if tot > 0 else 0
+        grand += [fi, fk, tot, sos]
+        gt_sos.append(sos)
 
-    for idx in pv_fi.index:
-        row = list(idx)
-        tot_fi = tot_fk = tot_ft = tot_sc = 0
+    grand.append(round(sum(gt_sos) / len(gt_sos), 1) if gt_sos else 0)
+    store_overall = calc_sos(df, ['Store Code'])
+    gt_cov = len(store_overall)
+    gt_akt = len(store_overall[store_overall['SOS%'] >= 65])
+    gt_pct = round(gt_akt / gt_cov * 100, 1) if gt_cov > 0 else 0
+    grand += [gt_cov, gt_akt, gt_pct]
 
-        for m in ordered_months:
-            fi  = int(round(float(pv_fi.loc[idx, m])))
-            fk  = int(round(float(pv_fk.loc[idx, m])))
-            ft  = int(round(float(pv_ft.loc[idx, m])))
-            sos = round(float(pv_sos.loc[idx, m]), 2)
-            sc_val = int(pv_sc.loc[idx, m]) if idx in pv_sc.index else 0
-
-            row += [fi, fk, ft, sos, sc_val]
-            tot_fi += fi; tot_fk += fk; tot_ft += ft; tot_sc += sc_val
-
-        tot_sos = round(tot_fi / tot_ft * 100, 2) if tot_ft > 0 else 0
-        row += [tot_fi, tot_fk, tot_ft, tot_sos, tot_sc]
-        table_rows.append(row)
-
-    grand = ['GRAND TOTAL', '', '']
-    gt_fi = gt_fk = gt_ft = gt_sc = 0
-    for m in ordered_months:
-        fi  = int(round(pv_fi[m].sum()))
-        fk  = int(round(pv_fk[m].sum()))
-        ft  = int(round(pv_ft[m].sum()))
-        sos = round(fi / ft * 100, 2) if ft > 0 else 0
-        sc_val = int(pv_sc[m].sum()) if m in pv_sc.columns else 0
-        grand += [fi, fk, ft, sos, sc_val]
-        gt_fi += fi; gt_fk += fk; gt_ft += ft; gt_sc += sc_val
-    gt_sos = round(gt_fi / gt_ft * 100, 2) if gt_ft > 0 else 0
-    grand += [gt_fi, gt_fk, gt_ft, gt_sos, gt_sc]
-    table_rows.append(grand)
-
+    rows     = [header1, header2] + result_rows + [grand]
     num_cols = len(header1)
-    hapus_semua_formatting(ws, len(table_rows) + 10, num_cols + 5)
-    ws.update('A1', table_rows)
-    ws.freeze(rows=2, cols=3)   # freeze 2 header rows + 3 kolom (Region, Area, Store)
-    terapkan_filter(ws, 1)
+
+    # SOS% cols: index 3 (Channel), 4 (Account), 5 (TARGET) → period data starts at col 3
+    # per period: fi(+0), fk(+1), tot(+2), sos(+3) → SOS% at 3+3, 3+7, 3+11, ...
+    sos_cols = [3 + 4*i + 3 for i in range(n)] + [3 + 4*n]
+
+    meta = {
+        'num_cols'       : num_cols,
+        'sos_col_indices': sos_cols,
+        'target_col_idx' : 2,
+    }
+    return rows, meta
+
+
+# ─────────────────────────── DASHBOARD ─────────────────────────
+
+def buat_dashboard(ws, df):
+    targets = baca_target_dari_dashboard(ws)
+    hapus_semua_chart(ws.spreadsheet, ws.id)
+    api_retry(ws.clear)
+
+    semua_period = sorted(df['Period'].unique(), key=sort_key_period)
+
+    # Level tunggal: level_label, kolom_di_df, dim_key_untuk_targets
+    single_levels = [
+        ('REGION',           'Region',           'REGION'),
+        ('CHANNEL',          'Channel',          'CHANNEL'),
+        ('CATEGORY CHANNEL', 'Category Channel', 'CATEGORY CHANNEL'),
+    ]
+
+    all_rows     = []
+    fmt_sections = []
+
+    # ── Section: single-column levels ──
+    for label, col, dim_label in single_levels:
+        if col not in df.columns or df[col].dropna().empty:
+            continue
+
+        compliance_map = calc_compliance(df, col, targets, dim_label)
+        table_rows, meta = buat_tabel_sos_monthly(
+            df, col, dim_label, semua_period, targets, compliance_map
+        )
+
+        title_row   = len(all_rows) + 1
+        all_rows.append([f'SOS% BY {label}'])
+        header1_row = len(all_rows) + 1
+        header2_row = len(all_rows) + 2
+        data_start  = len(all_rows) + 3
+        all_rows.extend(table_rows)
+        grand_row   = len(all_rows)
+
+        fmt_sections.append({
+            'label'          : label,
+            'title_row'      : title_row,
+            'header1_row'    : header1_row,
+            'header2_row'    : header2_row,
+            'data_start'     : data_start,
+            'grand_row'      : grand_row,
+            'num_cols'       : meta['num_cols'],
+            'sos_col_indices': meta['sos_col_indices'],
+            'target_col_idx' : meta['target_col_idx'],
+        })
+        all_rows.append([]); all_rows.append([])
+
+    # ── Section: CHANNEL × ACCOUNT ──
+    if 'Channel' in df.columns and 'Account' in df.columns:
+        table_rows, meta = buat_tabel_channel_account(df, semua_period, targets)
+
+        title_row   = len(all_rows) + 1
+        all_rows.append(['SOS% BY CHANNEL × ACCOUNT'])
+        header1_row = len(all_rows) + 1
+        header2_row = len(all_rows) + 2
+        data_start  = len(all_rows) + 3
+        all_rows.extend(table_rows)
+        grand_row   = len(all_rows)
+
+        fmt_sections.append({
+            'label'          : 'CHANNEL × ACCOUNT',
+            'title_row'      : title_row,
+            'header1_row'    : header1_row,
+            'header2_row'    : header2_row,
+            'data_start'     : data_start,
+            'grand_row'      : grand_row,
+            'num_cols'       : meta['num_cols'],
+            'sos_col_indices': meta['sos_col_indices'],
+            'target_col_idx' : meta['target_col_idx'],
+        })
+        all_rows.append([]); all_rows.append([])
+
+    if not fmt_sections:
+        print('[WARNING] Tidak ada data untuk dashboard.')
+        return
+
+    total_rows = len(all_rows)
+    total_cols = max(s['num_cols'] for s in fmt_sections)
+
+    hapus_semua_formatting(ws, total_rows + 10, total_cols + 5)
+    time.sleep(1)
+    api_retry(ws.update, range_name='A1', values=all_rows)
+    time.sleep(1)
+
+    # Reset freeze
+    api_retry(ws.spreadsheet.batch_update, {'requests': [{'updateSheetProperties': {
+        'properties': {'sheetId': ws.id,
+                       'gridProperties': {'frozenRowCount': 0, 'frozenColumnCount': 0}},
+        'fields': 'gridProperties.frozenRowCount,gridProperties.frozenColumnCount'
+    }}]})
+    time.sleep(1)
+
+    hapus_conditional_format(ws.spreadsheet, ws.id)
+    time.sleep(1)
 
     try:
         from gspread_formatting import format_cell_ranges, CellFormat, Color, TextFormat
@@ -318,146 +591,250 @@ def buat_store_detail(ws, df):
         BLUE_DARK  = Color(0.13, 0.37, 0.62)
         BLUE_MED   = Color(0.27, 0.51, 0.71)
         BLUE_LIGHT = Color(0.64, 0.76, 0.89)
+        GREY       = Color(0.85, 0.85, 0.85)
+        ORANGE     = Color(1.0, 0.60, 0.20)
         WHITE      = Color(1, 1, 1)
-        ec = col_letter(num_cols - 1)
-        gr = len(table_rows)
 
+        cell_fmt = []
+        for s in fmt_sections:
+            ec = col_letter(s['num_cols'] - 1)
+            tr, h1, h2, gr, ds = s['title_row'], s['header1_row'], s['header2_row'], s['grand_row'], s['data_start']
+            tgt_col = col_letter(s['target_col_idx'])
+
+            cell_fmt += [
+                (f'A{tr}:{ec}{tr}', CellFormat(backgroundColor=GREY,
+                    textFormat=TextFormat(bold=True, fontSize=11))),
+                (f'A{h1}:{ec}{h1}', CellFormat(backgroundColor=BLUE_DARK,
+                    textFormat=TextFormat(bold=True, foregroundColor=WHITE))),
+                (f'A{h2}:{ec}{h2}', CellFormat(backgroundColor=BLUE_MED,
+                    textFormat=TextFormat(bold=True, foregroundColor=WHITE))),
+                (f'{tgt_col}{ds}:{tgt_col}{gr}', CellFormat(backgroundColor=ORANGE,
+                    textFormat=TextFormat(bold=True))),
+                (f'A{gr}:{ec}{gr}', CellFormat(backgroundColor=BLUE_LIGHT,
+                    textFormat=TextFormat(bold=True))),
+            ]
+
+        api_retry(format_cell_ranges, ws, cell_fmt)
+        time.sleep(1)
+
+        # Conditional formatting per section (hanya kolom SOS%)
+        for s in fmt_sections:
+            terapkan_conditional_format(
+                ws.spreadsheet, ws.id,
+                s['data_start'], s['grand_row'],
+                s['sos_col_indices'],
+                s['target_col_idx'],
+            )
+            time.sleep(1)
+
+        print('Formatting dashboard berhasil!')
+
+    except ImportError:
+        print('Install: pip install gspread-formatting')
+    except Exception as e:
+        print(f'Formatting error (diabaikan): {e}')
+
+
+# ─────────────────────────── STORE DETAIL ──────────────────────
+
+def buat_store_detail(ws, df):
+    api_retry(ws.clear)
+
+    semua_period = sorted(df['Period'].unique(), key=sort_key_period)
+    index_cols   = ['Region', 'Area', 'Store Name']
+
+    sos_data   = hitung_sos(df, index_cols)
+    store_data = df.groupby(index_cols + ['Period'])['Store Code'].nunique().reset_index()
+    store_data.rename(columns={'Store Code': 'store_count'}, inplace=True)
+
+    ordered_periods = [p for p in semua_period if p in sos_data['Period'].unique()]
+
+    def make_pivot(data, val, agg):
+        p = data.pivot_table(index=index_cols, columns='Period', values=val, aggfunc=agg, fill_value=0)
+        return p.reindex(columns=ordered_periods, fill_value=0)
+
+    pv_fi  = make_pivot(sos_data,   'facing_indofood',   'sum')
+    pv_fk  = make_pivot(sos_data,   'facing_kompetitor', 'sum')
+    pv_ft  = make_pivot(sos_data,   'total_facing',      'sum')
+    pv_sos = make_pivot(sos_data,   'SOS_%',             'mean')
+    pv_sc  = make_pivot(store_data, 'store_count',       'sum')
+
+    n_idx   = len(index_cols)
+    header1 = index_cols[:]
+    header2 = [''] * n_idx
+    for p in ordered_periods:
+        header1 += [p] + [''] * (N_METRICS - 1)
+        header2 += METRIC_LABELS
+    header1 += ['TOTAL'] + [''] * (N_METRICS - 1)
+    header2 += METRIC_LABELS
+
+    table_rows = [header1, header2]
+
+    for idx in pv_fi.index:
+        row    = list(idx)
+        tot_fi = tot_fk = tot_ft = tot_sc = 0
+
+        for p in ordered_periods:
+            fi     = int(round(float(pv_fi.loc[idx, p])))
+            fk     = int(round(float(pv_fk.loc[idx, p])))
+            ft     = int(round(float(pv_ft.loc[idx, p])))
+            sos    = round(float(pv_sos.loc[idx, p]), 1)
+            sc_val = int(pv_sc.loc[idx, p]) if idx in pv_sc.index else 0
+            row   += [fi, fk, ft, sos, sc_val]
+            tot_fi += fi; tot_fk += fk; tot_ft += ft; tot_sc += sc_val
+
+        tot_sos = round(tot_fi / tot_ft * 100, 1) if tot_ft > 0 else 0
+        row += [tot_fi, tot_fk, tot_ft, tot_sos, tot_sc]
+        table_rows.append(row)
+
+    grand  = ['GRAND TOTAL', '', '']
+    gt_fi  = gt_fk = gt_ft = gt_sc = 0
+    for p in ordered_periods:
+        fi     = int(round(pv_fi[p].sum()))
+        fk     = int(round(pv_fk[p].sum()))
+        ft     = int(round(pv_ft[p].sum()))
+        sos    = round(fi / ft * 100, 1) if ft > 0 else 0
+        sc_val = int(pv_sc[p].sum()) if p in pv_sc.columns else 0
+        grand += [fi, fk, ft, sos, sc_val]
+        gt_fi += fi; gt_fk += fk; gt_ft += ft; gt_sc += sc_val
+    gt_sos = round(gt_fi / gt_ft * 100, 1) if gt_ft > 0 else 0
+    grand += [gt_fi, gt_fk, gt_ft, gt_sos, gt_sc]
+    table_rows.append(grand)
+
+    num_cols = len(header1)
+    hapus_semua_formatting(ws, len(table_rows) + 10, num_cols + 5)
+    ws.update(range_name='A1', values=table_rows)
+    ws.freeze(rows=2, cols=3)
+    terapkan_filter(ws, 1)
+
+    try:
+        from gspread_formatting import format_cell_ranges, CellFormat, Color, TextFormat
+        BLUE_DARK = Color(0.13, 0.37, 0.62); BLUE_MED = Color(0.27, 0.51, 0.71)
+        BLUE_LIGHT = Color(0.64, 0.76, 0.89); WHITE = Color(1, 1, 1)
+        ec = col_letter(num_cols - 1); gr = len(table_rows)
         format_cell_ranges(ws, [
-            (f'A1:{ec}1', CellFormat(
-                backgroundColor=BLUE_DARK,
-                textFormat=TextFormat(bold=True, foregroundColor=WHITE)
-            )),
-            (f'A2:{ec}2', CellFormat(
-                backgroundColor=BLUE_MED,
-                textFormat=TextFormat(bold=True, foregroundColor=WHITE)
-            )),
-            (f'A{gr}:{ec}{gr}', CellFormat(
-                backgroundColor=BLUE_LIGHT,
-                textFormat=TextFormat(bold=True)
-            )),
+            (f'A1:{ec}1', CellFormat(backgroundColor=BLUE_DARK,
+                textFormat=TextFormat(bold=True, foregroundColor=WHITE))),
+            (f'A2:{ec}2', CellFormat(backgroundColor=BLUE_MED,
+                textFormat=TextFormat(bold=True, foregroundColor=WHITE))),
+            (f'A{gr}:{ec}{gr}', CellFormat(backgroundColor=BLUE_LIGHT,
+                textFormat=TextFormat(bold=True))),
         ])
     except Exception as e:
-        print(f'Formatting store error (diabaikan): {e}')
+        print(f'Formatting store error: {e}')
 
     print('Sheet STORE DETAIL berhasil diupdate!')
 
 
-def tambah_chart(spreadsheet, ws, fmt_info, ordered_months):
-    """Tambahkan bar chart SOS% per Region ke DASHBOARD."""
-
-    region_info = next((i for i in fmt_info if i['label'] == 'REGION'), None)
-    if not region_info:
-        return
-
-    ws_id      = ws.id
-    h2_0idx    = region_info['header2_row'] - 1   # 0-indexed: baris metric labels
-    data_start = h2_0idx + 1                       # baris data pertama
-    data_end   = region_info['grand_total_row'] - 2  # exclude grand total
-
-    # Kolom SOS% untuk tiap bulan: col 0=index, lalu tiap bulan punya N_METRICS kolom
-    # SOS% ada di posisi ke-4 dari setiap grup bulan (0-indexed dalam grup)
-    series = []
-    for i, m in enumerate(ordered_months):
-        sos_col = 1 + N_METRICS * i + 3  # Indofood=0, Komp=1, Total=2, SOS%=3
-        series.append({
-            'series': {
-                'sourceRange': {
-                    'sources': [{
-                        'sheetId'         : ws_id,
-                        'startRowIndex'   : data_start,
-                        'endRowIndex'     : data_end + 1,
-                        'startColumnIndex': sos_col,
-                        'endColumnIndex'  : sos_col + 1,
-                    }]
-                }
-            },
-            'targetAxis': 'BOTTOM_AXIS',
-        })
-
-    try:
-        spreadsheet.batch_update({'requests': [{
-            'addChart': {
-                'chart': {
-                    'spec': {
-                        'title': 'SOS % by Region',
-                        'basicChart': {
-                            'chartType'     : 'BAR',
-                            'legendPosition': 'BOTTOM_LEGEND',
-                            'axis': [
-                                {'position': 'BOTTOM_AXIS', 'title': 'SOS %'},
-                                {'position': 'LEFT_AXIS',   'title': 'Region'},
-                            ],
-                            'domains': [{
-                                'domain': {
-                                    'sourceRange': {
-                                        'sources': [{
-                                            'sheetId'         : ws_id,
-                                            'startRowIndex'   : data_start,
-                                            'endRowIndex'     : data_end + 1,
-                                            'startColumnIndex': 0,
-                                            'endColumnIndex'  : 1,
-                                        }]
-                                    }
-                                }
-                            }],
-                            'series'     : series,
-                            'headerCount': 0,
-                        }
-                    },
-                    'position': {
-                        'overlayPosition': {
-                            'anchorCell': {
-                                'sheetId'     : ws_id,
-                                'rowIndex'    : region_info['title_row'] - 1,
-                                'columnIndex' : region_info['num_cols'] + 1,
-                            },
-                            'widthPixels' : 560,
-                            'heightPixels': 380,
-                        }
-                    }
-                }
-            }
-        }]})
-        print('Chart berhasil dibuat!')
-    except Exception as e:
-        print(f'Chart error (diabaikan): {e}')
-
+# ─────────────────────────── VALIDASI & BACA CSV ───────────────
 
 def validasi_data(df):
-    jumlah_sebelum = len(df)
+    n = len(df)
     df = df.drop_duplicates()
-    jumlah_hapus = jumlah_sebelum - len(df)
-    if jumlah_hapus > 0:
-        print(f'[INFO] {jumlah_hapus} baris duplikat dihapus otomatis.')
-
-    df_indofood = df[~df['Product Code'].astype(str).str.contains('COMPETITOR', case=False, na=False)]
-    baris_nan   = df_indofood[df_indofood['Facing'].isna()]
+    if len(df) < n:
+        print(f'[INFO] {n - len(df)} baris duplikat dihapus.')
+    df_i      = df[~is_competitor(df['Product Code'])]
+    baris_nan = df_i[df_i['Facing'].isna()]
     if not baris_nan.empty:
-        print(f'[WARNING] {len(baris_nan)} baris Indofood tidak punya data Facing:')
-        print(baris_nan[['Visit Date', 'Region', 'Store Name', 'Brand', 'Facing']].head(10).to_string(index=False))
-
+        print(f'[WARNING] {len(baris_nan)} baris Indofood tidak punya Facing.')
     return df
 
 
-def proses_data():
-    print('Ada perubahan! Memproses data...')
+def baca_semua_csv():
+    files = sorted(glob.glob('Report Product*.csv'))
+    if not files:
+        print('[WARNING] Tidak ada file CSV ditemukan.')
+        return None
 
-    scope  = ['https://spreadsheets.google.com/feeds',
-               'https://www.googleapis.com/auth/drive']
-    creds  = Credentials.from_service_account_file('gelatik-automation-6ba4ee1032b4.json', scopes=scope)
-    client = gspread.authorize(creds)
-    sheet  = client.open_by_key('1rExHFDTKoAnBabv5PZazE1AdEISDdPJsAcYhG1TTsnk')
+    print(f'[INFO] Membaca {len(files)} file:')
+    dfs = []
+    for f in files:
+        print(f'  → {f}')
+        dfs.append(pd.read_csv(f))
+
+    combined = pd.concat(dfs, ignore_index=True)
+    combined['Visit Date'] = pd.to_datetime(combined['Visit Date'], format='mixed', dayfirst=False)
+
+    # Period = "Jan 24", "Feb 24", "Jan 25", dst.
+    # Hybrid rule: pakai Month column HANYA jika lebih maju dari bulan Visit Date
+    # (advance reporting — mis. Jan 24 file punya baris Month="February" → Feb 24).
+    # Jika Month sama atau lebih mundur dari Visit Date → pakai Visit Date
+    # (late submission). Ini membuat Jan/Feb 25 tetap cocok dengan pivot manual.
+    MONTH_NUM = {
+        'January':1,'February':2,'March':3,'April':4,'May':5,'June':6,
+        'July':7,'August':8,'September':9,'October':10,'November':11,'December':12,
+    }
+    MONTH_ABB = {
+        1:'Jan',2:'Feb',3:'Mar',4:'Apr',5:'May',6:'Jun',
+        7:'Jul',8:'Aug',9:'Sep',10:'Oct',11:'Nov',12:'Dec',
+    }
+    visit_m = combined['Visit Date'].dt.month
+    year_str = combined['Visit Date'].dt.strftime('%y')
+    if 'Month' in combined.columns:
+        col_m   = combined['Month'].map(MONTH_NUM)
+        use_col = col_m > visit_m        # Month column lebih maju → pakai Month
+        eff_m   = col_m.where(use_col, visit_m).fillna(visit_m).astype(int)
+    else:
+        eff_m = visit_m
+    combined['Period'] = eff_m.map(MONTH_ABB) + ' ' + year_str
+
+    # Week — pastikan valid untuk semua baris
+    if 'Week' not in combined.columns:
+        combined['Week'] = combined['Visit Date'].dt.day.apply(
+            lambda d: f'W{min((d - 1) // 7 + 1, 5)}'
+        )
+    else:
+        combined['Week'] = combined['Week'].astype(str).str.strip().str.upper()
+        mask_invalid = ~combined['Week'].str.match(r'^W[1-5]$', na=True)
+        combined.loc[mask_invalid, 'Week'] = (
+            combined.loc[mask_invalid, 'Visit Date'].dt.day
+            .apply(lambda d: f'W{min((d - 1) // 7 + 1, 5)}')
+        )
+
+    # Pastikan kolom Account ada
+    if 'Account' not in combined.columns:
+        combined['Account'] = combined.get('Subchannel', 'UNKNOWN')
+
+    print(f'[INFO] Total baris: {len(combined):,}')
+    summary = combined.groupby('Period').size().reset_index(name='rows')
+    summary = summary.sort_values('Period', key=lambda s: s.map(sort_key_period))
+    print(summary.to_string(index=False))
+    return combined
+
+
+# ─────────────────────────── MAIN PROCESS ──────────────────────
+
+def proses_data():
+    print('\nMemproses data...')
+
+    scope  = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+    creds  = Credentials.from_service_account_file(
+        'gelatik-automation-6ba4ee1032b4.json', scopes=scope)
+
+    # Retry koneksi Google Sheets sampai 3x kalau jaringan putus
+    for attempt in range(1, 4):
+        try:
+            client = gspread.authorize(creds)
+            sheet  = client.open_by_key('1rExHFDTKoAnBabv5PZazE1AdEISDdPJsAcYhG1TTsnk')
+            break
+        except Exception as e:
+            if attempt == 3:
+                print(f'[ERROR] Gagal koneksi ke Google Sheets setelah 3x: {e}')
+                return
+            print(f'[WARNING] Koneksi gagal (attempt {attempt}), retry dalam 5 detik...')
+            time.sleep(5)
 
     titles = [ws.title for ws in sheet.worksheets()]
     for title in ['DASHBOARD', 'STORE DETAIL']:
         if title not in titles:
-            sheet.add_worksheet(title=title, rows=5000, cols=100)
+            sheet.add_worksheet(title=title, rows=5000, cols=200)
+
     ws_dashboard = sheet.worksheet('DASHBOARD')
     ws_store     = sheet.worksheet('STORE DETAIL')
 
-    df_raw = pd.read_csv(CSV_FILE)
-    df_raw['Visit Date'] = pd.to_datetime(df_raw['Visit Date'], dayfirst=False)
-    df_raw['Year']  = df_raw['Visit Date'].dt.year
+    df_raw = baca_semua_csv()
+    if df_raw is None:
+        return
 
     df = validasi_data(df_raw)
 
@@ -467,18 +844,22 @@ def proses_data():
     buat_store_detail(ws_store, df)
 
 
+# ─────────────────────────── WATCHDOG ──────────────────────────
+
 class CSVHandler(FileSystemEventHandler):
     def on_any_event(self, event):
         if event.event_type in ('modified', 'created') and event.src_path.endswith('.csv'):
-            print('File CSV berubah! Memproses...')
-            time.sleep(1)
+            print(f'File CSV terdeteksi: {event.src_path}')
+            time.sleep(2)
             proses_data()
 
+
+proses_data()  # proses langsung saat pertama dijalankan
 
 observer = PollingObserver()
 observer.schedule(CSVHandler(), path='.', recursive=False)
 observer.start()
-print(f'Watchdog aktif! Menunggu perubahan pada {CSV_FILE}...')
+print('Watchdog aktif! Menunggu perubahan CSV...')
 
 try:
     while True:
