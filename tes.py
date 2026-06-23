@@ -34,6 +34,21 @@ def is_competitor(series):
     return series.astype(str).str.contains('COMPETITOR', case=False, na=False)
 
 
+def extract_parent_brand(brand_name, is_competitor=False):
+    """Ekstrak nama brand induk dari nama brand detail.
+    Competitor brands tetap pakai nama lengkap.
+    Contoh Indofood: 'INDOMIE SOTO MIE-SM' -> 'INDOMIE'
+    """
+    brand = str(brand_name).strip().upper()
+    if is_competitor:
+        return brand
+    KNOWN_PARENTS = ['SARIMI GELAS', 'CAP 3 AYAM', 'POP MIE', 'IND MIE']
+    for parent in KNOWN_PARENTS:
+        if brand.startswith(parent):
+            return 'INDOMIE' if parent == 'IND MIE' else parent
+    return brand.split()[0] if brand else brand
+
+
 def sort_key_period(label):
     """Sort 'Jan 25', 'Feb 25' dst. secara kronologis."""
     MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
@@ -135,7 +150,7 @@ def hapus_semua_formatting(ws, total_rows, total_cols):
     try:
         from gspread_formatting import format_cell_range, CellFormat
         last_col = col_letter(total_cols - 1)
-        format_cell_range(ws, f'A1:{last_col}{total_rows}', CellFormat())
+        ws.spreadsheet.batch_update({'requests': [{'updateCells': {'range': {'sheetId': ws.id}, 'fields': 'userEnteredFormat'}}]})
     except Exception:
         pass
 
@@ -487,6 +502,251 @@ def buat_tabel_channel_account(df, semua_period, targets):
     return rows, meta
 
 
+def buat_category_divisi_section(df, periods, targets):
+    """Bangun tabel SOS% BY CATEGORY BY DIVISI.
+    Per brand per period: Facing (brand), Total (kategori), SOS%.
+    Indofood & Competitor di baris terpisah.
+    Logic Period diadopsi dari progress1.
+    """
+    is_comp = is_competitor(df['Product Code'])
+
+    df = df.copy()
+    if 'Period' not in df.columns:
+        df = tambah_period_column(df)
+        
+    df['Parent Brand'] = df.apply(
+        lambda row: extract_parent_brand(row['Brand'], is_comp[row.name]), axis=1
+    )
+
+    all_periods = sorted(df['Period'].unique(), key=sort_key_period)
+
+    categories = [c for c in ['BAG NOODLE', 'CUP NOODLE', 'REGULER NOODLE']
+                  if c in df['Category Channel'].unique()]
+
+    CD_METRICS = ['Facing', 'Total', 'SOS%']
+    n_met = len(CD_METRICS)
+
+    # Header baris 1
+    header1 = ['Category by Divisi', 'Brand By Facing', 'TARGET']
+    for p in all_periods:
+        header1 += [p] + [''] * (n_met - 1)
+    header1 += ['TOTAL'] + [''] * (n_met - 1)
+
+    # Header baris 2
+    header2 = ['', '', ''] + CD_METRICS * (len(all_periods) + 1)
+
+    rows = [header1, header2]
+    subtotal_row_indices = []
+    cat_ranges = []
+
+    for cat in categories:
+        df_cat = df[df['Category Channel'] == cat]
+        cat_comp = is_comp[df_cat.index]
+
+        # Total facing per period untuk kategori ini
+        total_period = df_cat.groupby('Period')['Facing'].sum()
+
+        # Split brands
+        brands_indo = sorted(df_cat[~cat_comp]['Parent Brand'].unique())
+        brands_comp = sorted(df_cat[cat_comp]['Parent Brand'].unique())
+
+        def make_brand_row(brand_name, df_brand):
+            target = get_target(targets, 'CATEGORY BY DIVISI', brand_name)
+            row = [cat, brand_name, target]
+            grand_facing = 0
+            grand_total = 0
+
+            for p in all_periods:
+                bf = int(round(df_brand[df_brand['Period'] == p]['Facing'].sum()))
+                tf = int(round(total_period.get(p, 0)))
+                sos = round(bf / tf * 100, 2) if tf > 0 else 0
+                row += [bf, tf, sos]
+                grand_facing += bf
+                grand_total += tf
+
+            grand_sos = round(grand_facing / grand_total * 100, 2) if grand_total > 0 else 0
+            row += [grand_facing, grand_total, grand_sos]
+            return row
+
+        # Baris per brand Indofood lalu Competitor
+        cat_start = len(rows)
+        for b in brands_indo:
+            rows.append(make_brand_row(b, df_cat[df_cat['Parent Brand'] == b]))
+        for b in brands_comp:
+            rows.append(make_brand_row(b, df_cat[df_cat['Parent Brand'] == b]))
+        cat_end = len(rows)
+        
+        if cat_end > cat_start:
+            cat_ranges.append({'cat': cat, 'start': cat_start, 'end': cat_end})
+
+        # Subtotal rows
+        def make_subtotal_row(label, df_sub):
+            row = [label, '', '']
+            s_facing = 0
+            s_total = 0
+
+            for p in all_periods:
+                bf = int(round(df_sub[df_sub['Period'] == p]['Facing'].sum()))
+                tf = int(round(total_period.get(p, 0)))
+                sos = round(bf / tf * 100, 2) if tf > 0 else 0
+                row += [bf, tf, sos]
+                s_facing += bf
+                s_total += tf
+
+            s_sos = round(s_facing / s_total * 100, 2) if s_total > 0 else 0
+            row += [s_facing, s_total, s_sos]
+            return row
+
+        subtotal_row_indices.append(len(rows))
+        rows.append(make_subtotal_row(f'{cat} COMPETITOR Total', df_cat[cat_comp]))
+        subtotal_row_indices.append(len(rows))
+        rows.append(make_subtotal_row(f'{cat} INDOFOOD Total', df_cat[~cat_comp]))
+
+    # Grand Total
+    total_all_period = df.groupby('Period')['Facing'].sum()
+    df_indo = df[~is_comp]
+    
+    target_gt = get_target(targets, 'CATEGORY BY DIVISI', 'DEFAULT')
+    grand = ['GRAND TOTAL', '', target_gt]
+    g_facing = 0
+    g_total = 0
+
+    for p in all_periods:
+        fi = int(round(df_indo[df_indo['Period'] == p]['Facing'].sum()))
+        tf = int(round(total_all_period.get(p, 0)))
+        sos = round(fi / tf * 100, 2) if tf > 0 else 0
+        grand += [fi, tf, sos]
+        g_facing += fi
+        g_total += tf
+
+    g_sos = round(g_facing / g_total * 100, 2) if g_total > 0 else 0
+    grand += [g_facing, g_total, g_sos]
+    rows.append(grand)
+
+    num_cols = len(header1)
+    
+    sos_cols = [5 + 3*i for i in range(len(all_periods) + 1)]
+    
+    meta = {
+        'num_cols': num_cols,
+        'sos_col_indices': sos_cols,
+        'target_col_idx': 2,
+        'subtotal_rows': subtotal_row_indices,
+        'cat_ranges': cat_ranges,
+        'periods': all_periods
+    }
+    
+    return rows, meta
+
+
+def tambahkan_chart_category_divisi(spreadsheet, ws_id, fmt_section):
+    requests = []
+    
+    data_start = fmt_section['data_start']
+    cat_ranges = fmt_section.get('cat_ranges', [])
+    periods = fmt_section.get('periods', [])
+    sos_cols = fmt_section.get('sos_col_indices', [])
+    
+    # We want to place charts below the table.
+    anchor_row = fmt_section['grand_row'] + 2 
+    
+    for c_idx, cr in enumerate(cat_ranges):
+        cat_name = cr['cat']
+        start_row = data_start + cr['start'] - 3
+        end_row = data_start + cr['end'] - 3
+        
+        for p_idx, p_name in enumerate(periods):
+            sos_col = sos_cols[p_idx]
+            
+            # anchor column based on p_idx
+            anchor_col = p_idx * 8 
+            
+            chart_req = {
+                "addChart": {
+                    "chart": {
+                        "spec": {
+                            "title": f"{cat_name} - {p_name}",
+                            "basicChart": {
+                                "chartType": "COLUMN",
+                                "legendPosition": "NO_LEGEND",
+                                "axis": [
+                                    {"position": "BOTTOM_AXIS", "title": ""},
+                                    {"position": "LEFT_AXIS", "title": "SOS%"}
+                                ],
+                                "domains": [
+                                    {
+                                        "domain": {
+                                            "sourceRange": {
+                                                "sources": [
+                                                    {
+                                                        "sheetId": ws_id,
+                                                        "startRowIndex": start_row,
+                                                        "endRowIndex": end_row,
+                                                        "startColumnIndex": 1, 
+                                                        "endColumnIndex": 2
+                                                    }
+                                                ]
+                                            }
+                                        }
+                                    }
+                                ],
+                                "series": [
+                                    {
+                                        "series": {
+                                            "sourceRange": {
+                                                "sources": [
+                                                    {
+                                                        "sheetId": ws_id,
+                                                        "startRowIndex": start_row,
+                                                        "endRowIndex": end_row,
+                                                        "startColumnIndex": sos_col,
+                                                        "endColumnIndex": sos_col + 1
+                                                    }
+                                                ]
+                                            }
+                                        },
+                                        "targetAxis": "LEFT_AXIS",
+                                        "dataLabel": {
+                                            "type": "DATA",
+                                            "textFormat": {
+                                                "fontSize": 10,
+                                                "bold": True,
+                                                "foregroundColorStyle": {
+                                                    "rgbColor": {"red": 0.2, "green": 0.2, "blue": 0.2}
+                                                }
+                                            }
+                                        }
+                                    }
+                                ],
+                                "headerCount": 0
+                            }
+                        },
+                        "position": {
+                            "overlayPosition": {
+                                "anchorCell": {
+                                    "sheetId": ws_id,
+                                    "rowIndex": anchor_row + c_idx * 24,
+                                    "columnIndex": anchor_col
+                                },
+                                "offsetXPixels": 0,
+                                "offsetYPixels": 0,
+                                "widthPixels": 750,
+                                "heightPixels": 450
+                            }
+                        }
+                    }
+                }
+            }
+            requests.append(chart_req)
+            
+    if requests:
+        try:
+            api_retry(spreadsheet.batch_update, {'requests': requests})
+            print(f'[INFO] Berhasil menambahkan {len(requests)} barchart CATEGORY BY DIVISI.')
+        except Exception as e:
+            print(f'Gagal menambahkan chart: {e}')
+
+
 # ─────────────────────────── DASHBOARD ─────────────────────────
 
 def buat_dashboard(ws, df):
@@ -562,6 +822,33 @@ def buat_dashboard(ws, df):
         })
         all_rows.append([]); all_rows.append([])
 
+    # ── Section: CATEGORY BY DIVISI ──
+    table_rows, meta = buat_category_divisi_section(df, semua_period, targets)
+
+    title_row   = len(all_rows) + 1
+    all_rows.append(['SOS% BY CATEGORY BY DIVISI'])
+    header1_row = len(all_rows) + 1
+    header2_row = len(all_rows) + 2
+    data_start  = len(all_rows) + 3
+    all_rows.extend(table_rows)
+    grand_row   = len(all_rows)
+
+    subtotal_rows_abs = [header1_row + i for i in meta.get('subtotal_rows', [])]
+
+    fmt_sections.append({
+        'label'          : 'CATEGORY BY DIVISI',
+        'title_row'      : title_row,
+        'header1_row'    : header1_row,
+        'header2_row'    : header2_row,
+        'data_start'     : data_start,
+        'grand_row'      : grand_row,
+        'num_cols'       : meta['num_cols'],
+        'sos_col_indices': meta['sos_col_indices'],
+        'target_col_idx' : meta['target_col_idx'],
+        'subtotal_rows'  : subtotal_rows_abs, 'cat_ranges': meta.get('cat_ranges', []), 'periods': meta.get('periods', []),
+    })
+    all_rows.append([]); all_rows.append([])
+
     if not fmt_sections:
         print('[WARNING] Tidak ada data untuk dashboard.')
         return
@@ -613,6 +900,13 @@ def buat_dashboard(ws, df):
                 (f'A{gr}:{ec}{gr}', CellFormat(backgroundColor=BLUE_LIGHT,
                     textFormat=TextFormat(bold=True))),
             ]
+            
+            if 'subtotal_rows' in s:
+                for sr in s['subtotal_rows']:
+                    cell_fmt.append(
+                        (f'A{sr}:{ec}{sr}', CellFormat(backgroundColor=BLUE_MED,
+                            textFormat=TextFormat(bold=True, foregroundColor=WHITE)))
+                    )
 
         api_retry(format_cell_ranges, ws, cell_fmt)
         time.sleep(1)
@@ -628,6 +922,11 @@ def buat_dashboard(ws, df):
             time.sleep(1)
 
         print('Formatting dashboard berhasil!')
+
+        for s in fmt_sections:
+            if s['label'] == 'CATEGORY BY DIVISI':
+                tambahkan_chart_category_divisi(ws.spreadsheet, ws.id, s)
+                time.sleep(1)
 
     except ImportError:
         print('Install: pip install gspread-formatting')
@@ -749,7 +1048,7 @@ def baca_semua_csv():
     print(f'[INFO] Membaca {len(files)} file:')
     dfs = []
     for f in files:
-        print(f'  → {f}')
+        print(f'  -> {f}')
         dfs.append(pd.read_csv(f))
 
     combined = pd.concat(dfs, ignore_index=True)
@@ -854,16 +1153,17 @@ class CSVHandler(FileSystemEventHandler):
             proses_data()
 
 
-proses_data()  # proses langsung saat pertama dijalankan
+if __name__ == '__main__':
+    proses_data()  # proses langsung saat pertama dijalankan
 
-observer = PollingObserver()
-observer.schedule(CSVHandler(), path='.', recursive=False)
-observer.start()
-print('Watchdog aktif! Menunggu perubahan CSV...')
+    observer = PollingObserver()
+    observer.schedule(CSVHandler(), path='.', recursive=False)
+    observer.start()
+    print('Watchdog aktif! Menunggu perubahan CSV...')
 
-try:
-    while True:
-        time.sleep(1)
-except KeyboardInterrupt:
-    observer.stop()
-observer.join()
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        observer.stop()
+    observer.join()
