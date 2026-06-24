@@ -1134,14 +1134,18 @@ def buat_store_detail(ws, df):
 
 def validasi_data(df):
     n = len(df)
-    df = df.drop_duplicates()
+    cols_to_check = [c for c in df.columns if c != '_source_file']
+    df_clean_no_src = df[cols_to_check].drop_duplicates()
+    df_clean = df.loc[df_clean_no_src.index]
+    df_removed = df[~df.index.isin(df_clean.index)].copy()
+    df = df_clean
     if len(df) < n:
         print(f'[INFO] {n - len(df)} baris duplikat dihapus.')
     df_i      = df[~is_competitor(df['Product Code'])]
     baris_nan = df_i[df_i['Facing'].isna()]
     if not baris_nan.empty:
         print(f'[WARNING] {len(baris_nan)} baris Indofood tidak punya Facing.')
-    return df
+    return df, df_removed
 
 
 def baca_semua_csv():
@@ -1154,9 +1158,20 @@ def baca_semua_csv():
     dfs = []
     for f in files:
         print(f'  -> {f}')
-        dfs.append(pd.read_csv(f))
+        try:
+            df_temp = pd.read_csv(f, low_memory=False)
+        except pd.errors.ParserError:
+            df_temp = pd.read_csv(f, sep=';', low_memory=False)
+        df_temp['_source_file'] = os.path.splitext(os.path.basename(f))[0]
+        dfs.append(df_temp)
 
     combined = pd.concat(dfs, ignore_index=True)
+
+    mask_valid = combined['Visit Date'].notna()
+    if (~mask_valid).sum() > 0:
+        print(f'[INFO] Dihapus {(~mask_valid).sum()} baris rusak (tanpa Visit Date).')
+        combined = combined[mask_valid].copy()
+
     combined['Visit Date'] = pd.to_datetime(combined['Visit Date'], format='mixed', dayfirst=False)
 
     # Period = "Jan 24", "Feb 24", "Jan 25", dst.
@@ -1206,6 +1221,66 @@ def baca_semua_csv():
     return combined
 
 
+# ─────────────────────────── VALIDATION REPORT ───────────────────
+
+def buat_validation_report(ws, df_removed):
+    api_retry(ws.clear)
+
+    mask_complete = (
+        df_removed['Store Code'].notna() &
+        df_removed['Visit Date'].notna() &
+        df_removed['Product Code'].notna()
+    )
+    df_valid_rem = df_removed[mask_complete]
+
+    summary_rows = []
+    header_sum = ['File Name', 'Total Rows Removed', 'Total Facing Lost']
+    summary_rows.append(header_sum)
+
+    files = df_removed['_source_file'].unique() if '_source_file' in df_removed.columns else []
+    for f in sorted(files):
+        sub = df_valid_rem[df_valid_rem['_source_file'] == f] if '_source_file' in df_valid_rem.columns else df_valid_rem
+        rows_removed = len(df_removed[df_removed['_source_file'] == f]) if '_source_file' in df_removed.columns else len(df_removed)
+        facing_lost = sub['Facing'].fillna(0).sum()
+        summary_rows.append([f, rows_removed, int(facing_lost)])
+
+    summary_rows.append([])
+
+    detail_cols = ['_source_file', 'Region', 'Area', 'Channel', 'Account',
+                   'Store Name', 'Store Code', 'Visit Date', 'Product Code', 'Brand', 'Facing']
+    avail_cols = [c for c in detail_cols if c in df_valid_rem.columns]
+
+    detail_header = avail_cols.copy()
+    if '_source_file' in detail_header:
+        detail_header[detail_header.index('_source_file')] = 'File Name'
+    if 'Facing' in detail_header:
+        detail_header[detail_header.index('Facing')] = 'Facing Lost'
+    summary_rows.append(detail_header)
+
+    detail_data_df = df_valid_rem[avail_cols].copy()
+    for col in detail_data_df.select_dtypes(include=['datetime64[ns]', 'datetime64[ns, UTC]']).columns:
+        detail_data_df[col] = detail_data_df[col].dt.strftime('%Y-%m-%d')
+
+    summary_rows.extend(detail_data_df.fillna('').values.tolist())
+
+    api_retry(ws.update, range_name='A1', values=summary_rows)
+
+    try:
+        from gspread_formatting import format_cell_ranges, CellFormat, Color, TextFormat
+        BLUE_DARK = Color(0.13, 0.37, 0.62)
+        WHITE = Color(1, 1, 1)
+        detail_start_row = len(files) + 3
+        format_cell_ranges(ws, [
+            ('A1:C1', CellFormat(backgroundColor=BLUE_DARK,
+                                 textFormat=TextFormat(bold=True, foregroundColor=WHITE))),
+            (f'A{detail_start_row}:{col_letter(len(avail_cols))}{detail_start_row}',
+             CellFormat(backgroundColor=BLUE_DARK,
+                        textFormat=TextFormat(bold=True, foregroundColor=WHITE))),
+        ])
+    except Exception as e:
+        print(f'[WARNING] Formatting validation report: {e}')
+
+
 # ─────────────────────────── MAIN PROCESS ──────────────────────
 
 def proses_data():
@@ -1229,23 +1304,27 @@ def proses_data():
             time.sleep(5)
 
     titles = [ws.title for ws in sheet.worksheets()]
-    for title in ['DASHBOARD', 'STORE DETAIL']:
+    for title in ['DASHBOARD', 'STORE DETAIL', 'VALIDATION_REPORT']:
         if title not in titles:
             sheet.add_worksheet(title=title, rows=5000, cols=200)
 
     ws_dashboard = sheet.worksheet('DASHBOARD')
     ws_store     = sheet.worksheet('STORE DETAIL')
+    ws_validation = sheet.worksheet('VALIDATION_REPORT')
 
     df_raw = baca_semua_csv()
     if df_raw is None:
         return
 
-    df = validasi_data(df_raw)
+    df, df_removed = validasi_data(df_raw)
 
     buat_dashboard(ws_dashboard, df)
     print('DASHBOARD berhasil diupdate!')
 
     buat_store_detail(ws_store, df)
+
+    buat_validation_report(ws_validation, df_removed)
+    print('VALIDATION REPORT berhasil diupdate!')
 
 
 # ─────────────────────────── WATCHDOG ──────────────────────────
