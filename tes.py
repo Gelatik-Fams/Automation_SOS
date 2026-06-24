@@ -234,7 +234,8 @@ def terapkan_conditional_format(spreadsheet, ws_id, data_start_row, data_end_row
             }, 'index': 1}},
         ]
     try:
-        spreadsheet.batch_update({'requests': requests})
+        if requests:
+            spreadsheet.batch_update({'requests': requests})
     except Exception as e:
         print(f'Conditional format error: {e}')
 
@@ -307,8 +308,6 @@ def buat_tabel_sos_monthly(df, index_col, dim_label, semua_period, targets,
     for p in ordered_periods:
         header1 += [p, '', '', '']
         header2 += ['Indofood', 'Kompetitor', 'Total', 'SOS%']
-    header1 += ['AVG', 'STORE COV.', 'AKTUAL', '%']
-    header2 += ['', '', '', '']
 
     # ── Precompute fi/fk per (index_col, Period) ──
     fi_grp = df_i.groupby([index_col, 'Period'])['Facing'].sum()
@@ -321,7 +320,6 @@ def buat_tabel_sos_monthly(df, index_col, dim_label, semua_period, targets,
     for idx in all_indices:
         target_val  = get_target(targets, dim_label, idx)
         row         = [str(idx), target_val]
-        monthly_sos = []
 
         for p in ordered_periods:
             fi  = int(round(fi_grp.get((idx, p), 0)))
@@ -329,13 +327,7 @@ def buat_tabel_sos_monthly(df, index_col, dim_label, semua_period, targets,
             tot = fi + fk
             sos = round(fi / tot * 100, 1) if tot > 0 else 0
             row += [fi, fk, tot, sos]
-            monthly_sos.append(sos)
 
-        avg = round(sum(monthly_sos) / len(monthly_sos), 1) if monthly_sos else 0
-        row.append(avg)
-
-        cdata = compliance_map.get(str(idx).upper(), (0, 0, 0)) if compliance_map else (0, 0, 0)
-        row += list(cdata)
         data_rows.append(row)
 
     # ── Grand Total ──
@@ -349,20 +341,10 @@ def buat_tabel_sos_monthly(df, index_col, dim_label, semua_period, targets,
         grand += [fi, fk, tot, sos]
         gt_sos.append(sos)
 
-    grand.append(round(sum(gt_sos) / len(gt_sos), 1) if gt_sos else 0)
-    if compliance_map:
-        gt_cov = sum(v[0] for v in compliance_map.values())
-        gt_akt = sum(v[1] for v in compliance_map.values())
-        gt_pct = round(gt_akt / gt_cov * 100, 1) if gt_cov > 0 else 0
-        grand += [gt_cov, gt_akt, gt_pct]
-    else:
-        grand += [0, 0, 0]
-
     rows     = [header1, header2] + data_rows + [grand]
     num_cols = len(header1)
 
-    # Kolom SOS% = kolom ke-5,9,13,... (0-indexed: 2+3, 2+7, ...) + AVG (2+4n)
-    sos_cols = [2 + 4*i + 3 for i in range(n)] + [2 + 4*n]
+    sos_cols = [2 + 4*i + 3 for i in range(n)]
 
     meta = {
         'num_cols'      : num_cols,
@@ -394,8 +376,6 @@ def buat_tabel_channel_account(df, semua_period, targets):
     for p in ordered_periods:
         header1 += [p, '', '', '']
         header2 += ['Indofood', 'Kompetitor', 'Total', 'SOS%']
-    header1 += ['AVG', 'STORE COV.', 'AKTUAL', '%']
-    header2 += ['', '', '', '']
 
     store_sos = calc_sos(df, ['Channel', 'Account', 'Store Code'])
 
@@ -408,7 +388,7 @@ def buat_tabel_channel_account(df, semua_period, targets):
         num_cols = len(header1)
         return [header1, header2], {
             'num_cols': num_cols,
-            'sos_col_indices': [3 + 4*i + 3 for i in range(n)] + [3 + 4*n],
+            'sos_col_indices': [3 + 4*i + 3 for i in range(n)],
             'target_col_idx': 2,
         }
 
@@ -421,7 +401,6 @@ def buat_tabel_channel_account(df, semua_period, targets):
 
         target_val  = get_target(targets, 'CHANNEL-ACCOUNT', f'{ch} - {acc}')
         row         = [str(ch), str(acc), target_val]
-        monthly_sos = []
 
         for p in ordered_periods:
             fi  = int(round(fi_grp.get((ch, acc, p), 0)))
@@ -429,16 +408,7 @@ def buat_tabel_channel_account(df, semua_period, targets):
             tot = fi + fk
             sos = round(fi / tot * 100, 1) if tot > 0 else 0
             row += [fi, fk, tot, sos]
-            monthly_sos.append(sos)
 
-        avg = round(sum(monthly_sos) / len(monthly_sos), 1) if monthly_sos else 0
-        row.append(avg)
-
-        acc_sos  = store_sos[(store_sos['Channel'] == ch) & (store_sos['Account'] == acc)]
-        coverage = len(acc_sos)
-        aktual   = len(acc_sos[acc_sos['SOS%'] >= target_val])
-        pct      = round(aktual / coverage * 100, 1) if coverage > 0 else 0
-        row += [coverage, aktual, pct]
         ch_account_map[ch].append(row)
 
     # ── Susun baris: account rows + subtotal per channel ──
@@ -452,21 +422,13 @@ def buat_tabel_channel_account(df, semua_period, targets):
         result_rows.extend(acc_rows)
 
         sub_row  = [f'{ch} TOTAL', '', '']
-        sub_sos  = []
         for p in ordered_periods:
             fi  = int(round(fi_ch.get((ch, p), 0)))
             fk  = int(round(fk_ch.get((ch, p), 0)))
             tot = fi + fk
             sos = round(fi / tot * 100, 1) if tot > 0 else 0
             sub_row += [fi, fk, tot, sos]
-            sub_sos.append(sos)
 
-        sub_avg = round(sum(sub_sos) / len(sub_sos), 1) if sub_sos else 0
-        sub_row.append(sub_avg)
-        sub_cov = sum(r[-3] for r in acc_rows)
-        sub_akt = sum(r[-2] for r in acc_rows)
-        sub_pct = round(sub_akt / sub_cov * 100, 1) if sub_cov > 0 else 0
-        sub_row += [sub_cov, sub_akt, sub_pct]
         result_rows.append(sub_row)
 
     # ── Grand Total ──
@@ -480,19 +442,10 @@ def buat_tabel_channel_account(df, semua_period, targets):
         grand += [fi, fk, tot, sos]
         gt_sos.append(sos)
 
-    grand.append(round(sum(gt_sos) / len(gt_sos), 1) if gt_sos else 0)
-    store_overall = calc_sos(df, ['Store Code'])
-    gt_cov = len(store_overall)
-    gt_akt = len(store_overall[store_overall['SOS%'] >= 65])
-    gt_pct = round(gt_akt / gt_cov * 100, 1) if gt_cov > 0 else 0
-    grand += [gt_cov, gt_akt, gt_pct]
-
     rows     = [header1, header2] + result_rows + [grand]
     num_cols = len(header1)
 
-    # SOS% cols: index 3 (Channel), 4 (Account), 5 (TARGET) → period data starts at col 3
-    # per period: fi(+0), fk(+1), tot(+2), sos(+3) → SOS% at 3+3, 3+7, 3+11, ...
-    sos_cols = [3 + 4*i + 3 for i in range(n)] + [3 + 4*n]
+    sos_cols = [3 + 4*i + 3 for i in range(n)]
 
     meta = {
         'num_cols'       : num_cols,
@@ -523,17 +476,11 @@ def buat_category_divisi_section(df, periods, targets):
     categories = [c for c in ['BAG NOODLE', 'CUP NOODLE', 'REGULER NOODLE']
                   if c in df['Category Channel'].unique()]
 
-    CD_METRICS = ['Facing', 'Total', 'SOS%']
-    n_met = len(CD_METRICS)
-
     # Header baris 1
-    header1 = ['Category by Divisi', 'Brand By Facing', 'TARGET']
-    for p in all_periods:
-        header1 += [p] + [''] * (n_met - 1)
-    header1 += ['TOTAL'] + [''] * (n_met - 1)
+    header1 = ['Category by Divisi', 'Brand By Facing'] + all_periods + ['TOTAL']
 
     # Header baris 2
-    header2 = ['', '', ''] + CD_METRICS * (len(all_periods) + 1)
+    header2 = ['', ''] + ['SOS%'] * (len(all_periods) + 1)
 
     rows = [header1, header2]
     subtotal_row_indices = []
@@ -551,8 +498,7 @@ def buat_category_divisi_section(df, periods, targets):
         brands_comp = sorted(df_cat[cat_comp]['Parent Brand'].unique())
 
         def make_brand_row(brand_name, df_brand):
-            target = get_target(targets, 'CATEGORY BY DIVISI', brand_name)
-            row = [cat, brand_name, target]
+            row = [cat, brand_name]
             grand_facing = 0
             grand_total = 0
 
@@ -560,12 +506,12 @@ def buat_category_divisi_section(df, periods, targets):
                 bf = int(round(df_brand[df_brand['Period'] == p]['Facing'].sum()))
                 tf = int(round(total_period.get(p, 0)))
                 sos = round(bf / tf * 100, 2) if tf > 0 else 0
-                row += [bf, tf, sos]
+                row.append(sos)
                 grand_facing += bf
                 grand_total += tf
 
             grand_sos = round(grand_facing / grand_total * 100, 2) if grand_total > 0 else 0
-            row += [grand_facing, grand_total, grand_sos]
+            row.append(grand_sos)
             return row
 
         # Baris per brand Indofood lalu Competitor
@@ -581,7 +527,7 @@ def buat_category_divisi_section(df, periods, targets):
 
         # Subtotal rows
         def make_subtotal_row(label, df_sub):
-            row = [label, '', '']
+            row = [label, '']
             s_facing = 0
             s_total = 0
 
@@ -589,12 +535,12 @@ def buat_category_divisi_section(df, periods, targets):
                 bf = int(round(df_sub[df_sub['Period'] == p]['Facing'].sum()))
                 tf = int(round(total_period.get(p, 0)))
                 sos = round(bf / tf * 100, 2) if tf > 0 else 0
-                row += [bf, tf, sos]
+                row.append(sos)
                 s_facing += bf
                 s_total += tf
 
             s_sos = round(s_facing / s_total * 100, 2) if s_total > 0 else 0
-            row += [s_facing, s_total, s_sos]
+            row.append(s_sos)
             return row
 
         subtotal_row_indices.append(len(rows))
@@ -606,8 +552,7 @@ def buat_category_divisi_section(df, periods, targets):
     total_all_period = df.groupby('Period')['Facing'].sum()
     df_indo = df[~is_comp]
     
-    target_gt = get_target(targets, 'CATEGORY BY DIVISI', 'DEFAULT')
-    grand = ['GRAND TOTAL', '', target_gt]
+    grand = ['GRAND TOTAL', '']
     g_facing = 0
     g_total = 0
 
@@ -615,25 +560,134 @@ def buat_category_divisi_section(df, periods, targets):
         fi = int(round(df_indo[df_indo['Period'] == p]['Facing'].sum()))
         tf = int(round(total_all_period.get(p, 0)))
         sos = round(fi / tf * 100, 2) if tf > 0 else 0
-        grand += [fi, tf, sos]
+        grand.append(sos)
         g_facing += fi
         g_total += tf
 
     g_sos = round(g_facing / g_total * 100, 2) if g_total > 0 else 0
-    grand += [g_facing, g_total, g_sos]
+    grand.append(g_sos)
     rows.append(grand)
 
     num_cols = len(header1)
     
-    sos_cols = [5 + 3*i for i in range(len(all_periods) + 1)]
+    sos_cols = [2 + i for i in range(len(all_periods) + 1)]
     
     meta = {
         'num_cols': num_cols,
         'sos_col_indices': sos_cols,
-        'target_col_idx': 2,
+        'target_col_idx': None,
         'subtotal_rows': subtotal_row_indices,
         'cat_ranges': cat_ranges,
         'periods': all_periods
+    }
+    
+    return rows, meta
+
+
+
+def buat_region_divisi_section(df, periods):
+    is_comp = is_competitor(df['Product Code'])
+    df_i = df[~is_comp]
+    
+    categories = [c for c in ['BAG NOODLE', 'CUP NOODLE', 'REGULER NOODLE']
+                  if c in df['Category Channel'].unique()]
+    
+    ordered_periods = [p for p in periods if p in df['Period'].unique()]
+    
+    fi_grp = df_i.groupby(['Region', 'Category Channel', 'Period'])['Facing'].sum()
+    ft_grp = df.groupby(['Region', 'Category Channel', 'Period'])['Facing'].sum()
+    
+    fi_nat = df_i.groupby(['Category Channel', 'Period'])['Facing'].sum()
+    ft_nat = df.groupby(['Category Channel', 'Period'])['Facing'].sum()
+    
+    header1 = ['REGION']
+    header2 = ['']
+    for cat in categories:
+        header1 += [cat] + [''] * (len(ordered_periods) - 1)
+        header2 += ordered_periods
+        
+    rows = [header1, header2]
+    
+    regions = sorted([r for r in df['Region'].dropna().unique()])
+    
+    for r in regions:
+        row = [str(r).upper()]
+        for cat in categories:
+            for p in ordered_periods:
+                fi = int(round(fi_grp.get((r, cat, p), 0)))
+                ft = int(round(ft_grp.get((r, cat, p), 0)))
+                sos = round(fi / ft * 100, 2) if ft > 0 else 0
+                row.append(f"{sos:.2f}%".replace('.', ','))
+        rows.append(row)
+        
+    gt_row = ['GRAND TOTAL']
+    for cat in categories:
+        for p in ordered_periods:
+            fi = int(round(fi_nat.get((cat, p), 0)))
+            ft = int(round(ft_nat.get((cat, p), 0)))
+            sos = round(fi / ft * 100, 2) if ft > 0 else 0
+            gt_row.append(f"{sos:.2f}%".replace('.', ','))
+            
+    rows.append(gt_row)
+    
+    meta = {
+        'num_cols': len(header1),
+        'sos_col_indices': [],
+        'target_col_idx': None
+    }
+    
+    return rows, meta
+
+
+def buat_account_divisi_section(df, periods):
+    is_comp = is_competitor(df['Product Code'])
+    df_i = df[~is_comp]
+    
+    categories = [c for c in ['BAG NOODLE', 'CUP NOODLE', 'REGULER NOODLE']
+                  if c in df['Category Channel'].unique()]
+    
+    ordered_periods = [p for p in periods if p in df['Period'].unique()]
+    
+    fi_grp = df_i.groupby(['Account', 'Category Channel', 'Period'])['Facing'].sum()
+    ft_grp = df.groupby(['Account', 'Category Channel', 'Period'])['Facing'].sum()
+    
+    fi_nat = df_i.groupby(['Category Channel', 'Period'])['Facing'].sum()
+    ft_nat = df.groupby(['Category Channel', 'Period'])['Facing'].sum()
+    
+    header1 = ['ACCOUNT']
+    header2 = ['']
+    for cat in categories:
+        header1 += [cat] + [''] * (len(ordered_periods) - 1)
+        header2 += ordered_periods
+        
+    rows = [header1, header2]
+    
+    accounts = sorted([a for a in df['Account'].dropna().unique()])
+    
+    for a in accounts:
+        row = [str(a).upper()]
+        for cat in categories:
+            for p in ordered_periods:
+                fi = int(round(fi_grp.get((a, cat, p), 0)))
+                ft = int(round(ft_grp.get((a, cat, p), 0)))
+                sos = round(fi / ft * 100, 2) if ft > 0 else 0
+                row.append(f"{sos:.2f}%".replace('.', ','))
+        rows.append(row)
+        
+    gt_row = ['GRAND TOTAL']
+    for cat in categories:
+        for p in ordered_periods:
+            fi = int(round(fi_nat.get((cat, p), 0)))
+            ft = int(round(ft_nat.get((cat, p), 0)))
+            sos = round(fi / ft * 100, 2) if ft > 0 else 0
+            gt_row.append(f"{sos:.2f}%".replace('.', ','))
+            
+    rows.append(gt_row)
+    
+    meta = {
+        'num_cols': len(header1),
+        'sos_col_indices': [],
+        'target_col_idx': None
     }
     
     return rows, meta
@@ -822,6 +876,56 @@ def buat_dashboard(ws, df):
         })
         all_rows.append([]); all_rows.append([])
 
+    # ── Section: REGION x DIVISI ──
+    if 'Region' in df.columns and 'Category Channel' in df.columns:
+        table_rows, meta = buat_region_divisi_section(df, semua_period)
+
+        title_row   = len(all_rows) + 1
+        all_rows.append(['SOS% BY REGION x DIVISI'])
+        header1_row = len(all_rows) + 1
+        header2_row = len(all_rows) + 2
+        data_start  = len(all_rows) + 3
+        all_rows.extend(table_rows)
+        grand_row   = len(all_rows)
+
+        fmt_sections.append({
+            'label'          : 'REGION x DIVISI',
+            'title_row'      : title_row,
+            'header1_row'    : header1_row,
+            'header2_row'    : header2_row,
+            'data_start'     : data_start,
+            'grand_row'      : grand_row,
+            'num_cols'       : meta['num_cols'],
+            'sos_col_indices': meta['sos_col_indices'],
+            'target_col_idx' : meta['target_col_idx'],
+        })
+        all_rows.append([]); all_rows.append([])
+
+    # ── Section: ACCOUNT x DIVISI ──
+    if 'Account' in df.columns and 'Category Channel' in df.columns:
+        table_rows, meta = buat_account_divisi_section(df, semua_period)
+
+        title_row   = len(all_rows) + 1
+        all_rows.append(['SOS% BY ACCOUNT x DIVISI'])
+        header1_row = len(all_rows) + 1
+        header2_row = len(all_rows) + 2
+        data_start  = len(all_rows) + 3
+        all_rows.extend(table_rows)
+        grand_row   = len(all_rows)
+
+        fmt_sections.append({
+            'label'          : 'ACCOUNT x DIVISI',
+            'title_row'      : title_row,
+            'header1_row'    : header1_row,
+            'header2_row'    : header2_row,
+            'data_start'     : data_start,
+            'grand_row'      : grand_row,
+            'num_cols'       : meta['num_cols'],
+            'sos_col_indices': meta['sos_col_indices'],
+            'target_col_idx' : meta['target_col_idx'],
+        })
+        all_rows.append([]); all_rows.append([])
+
     # ── Section: CATEGORY BY DIVISI ──
     table_rows, meta = buat_category_divisi_section(df, semua_period, targets)
 
@@ -886,7 +990,6 @@ def buat_dashboard(ws, df):
         for s in fmt_sections:
             ec = col_letter(s['num_cols'] - 1)
             tr, h1, h2, gr, ds = s['title_row'], s['header1_row'], s['header2_row'], s['grand_row'], s['data_start']
-            tgt_col = col_letter(s['target_col_idx'])
 
             cell_fmt += [
                 (f'A{tr}:{ec}{tr}', CellFormat(backgroundColor=GREY,
@@ -895,11 +998,12 @@ def buat_dashboard(ws, df):
                     textFormat=TextFormat(bold=True, foregroundColor=WHITE))),
                 (f'A{h2}:{ec}{h2}', CellFormat(backgroundColor=BLUE_MED,
                     textFormat=TextFormat(bold=True, foregroundColor=WHITE))),
-                (f'{tgt_col}{ds}:{tgt_col}{gr}', CellFormat(backgroundColor=ORANGE,
-                    textFormat=TextFormat(bold=True))),
                 (f'A{gr}:{ec}{gr}', CellFormat(backgroundColor=BLUE_LIGHT,
                     textFormat=TextFormat(bold=True))),
             ]
+            if s.get('target_col_idx') is not None:
+                tgt_col = col_letter(s['target_col_idx'])
+                cell_fmt.append((f'{tgt_col}{ds}:{tgt_col}{gr}', CellFormat(backgroundColor=ORANGE, textFormat=TextFormat(bold=True))))
             
             if 'subtotal_rows' in s:
                 for sr in s['subtotal_rows']:
@@ -913,13 +1017,14 @@ def buat_dashboard(ws, df):
 
         # Conditional formatting per section (hanya kolom SOS%)
         for s in fmt_sections:
-            terapkan_conditional_format(
-                ws.spreadsheet, ws.id,
-                s['data_start'], s['grand_row'],
-                s['sos_col_indices'],
-                s['target_col_idx'],
-            )
-            time.sleep(1)
+            if s.get('sos_col_indices') and s.get('target_col_idx') is not None:
+                terapkan_conditional_format(
+                    ws.spreadsheet, ws.id,
+                    s['data_start'], s['grand_row'],
+                    s['sos_col_indices'],
+                    s['target_col_idx'],
+                )
+                time.sleep(1)
 
         print('Formatting dashboard berhasil!')
 
