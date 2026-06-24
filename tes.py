@@ -240,13 +240,48 @@ def terapkan_conditional_format(spreadsheet, ws_id, data_start_row, data_end_row
         print(f'Conditional format error: {e}')
 
 
-# ─────────────────────────── TARGET DARI DASHBOARD ─────────────
+# ─────────────────────────── TARGET ─────────────────────────────
 
-def baca_target_dari_dashboard(ws):
+def baca_target_dari_ws_targets(ws_targets):
     """
-    Baca TARGET (kolom B) dari dashboard sebelum di-clear.
-    User bisa edit langsung di kolom TARGET — dipertahankan saat script update.
+    Baca target dari sheet TARGETS.
+    Format sheet: baris header (Dimension | Name | Target), lalu data.
+    Contoh: REGION | BANDUNG | 70
     """
+    try:
+        rows = ws_targets.get_all_values()
+    except Exception:
+        return {}
+
+    targets = {}
+    for row in rows:
+        if len(row) < 3:
+            continue
+        dim, nama, tgt_str = row[0].strip(), row[1].strip(), row[2].strip()
+        if not dim or not nama or not tgt_str:
+            continue
+        if dim.upper() in ('DIMENSION', 'DIM'):
+            continue  # skip header
+        try:
+            targets[(dim.upper(), nama.upper())] = float(
+                tgt_str.replace('%', '').replace(',', '.')
+            )
+        except ValueError:
+            pass
+    return targets
+
+
+def baca_target_dari_dashboard(ws, ws_targets=None):
+    """
+    Baca target — prioritas: sheet TARGETS (jika ada), lalu kolom B di DASHBOARD.
+    """
+    # Prioritas 1: sheet TARGETS terpisah
+    if ws_targets is not None:
+        targets = baca_target_dari_ws_targets(ws_targets)
+        if targets:
+            return targets
+
+    # Prioritas 2: kolom B di DASHBOARD (backward compat)
     try:
         all_vals = ws.get_all_values()
     except Exception:
@@ -265,6 +300,7 @@ def baca_target_dari_dashboard(ws):
 
         if cell_a.startswith('SOS% BY '):
             current_dim = cell_a.replace('SOS% BY ', '').strip()
+            current_dim = current_dim.replace(' × ', '-').replace('×', '-')
             skip_count  = 2
             continue
 
@@ -284,6 +320,99 @@ def baca_target_dari_dashboard(ws):
                     pass
 
     return targets
+
+
+def inisialisasi_ws_targets(ws_targets, targets_existing, df=None):
+    """
+    Sinkronkan sheet TARGETS: pertahankan nilai yang sudah ada,
+    tambahkan entri yang belum ada (misal CHANNEL-ACCOUNT baru).
+    """
+    DEFAULT_TARGET = 65
+
+    try:
+        existing_rows = ws_targets.get_all_values()
+    except Exception:
+        existing_rows = []
+
+    # Baca entri yang sudah ada di sheet (beserta nilai targetnya)
+    existing_keys = {}  # (DIM, NAMA) -> baris ke-n (0-indexed)
+    for i, row in enumerate(existing_rows):
+        if len(row) < 2:
+            continue
+        dim, nama = row[0].strip().upper(), row[1].strip().upper()
+        if dim and nama and dim not in ('DIMENSION', 'DIM'):
+            existing_keys[(dim, nama)] = i
+
+    # Kumpulkan semua kombinasi dari data nyata
+    dim_values = {
+        'REGION': [],
+        'CHANNEL': [],
+        'CATEGORY CHANNEL': [],
+        'CHANNEL-ACCOUNT': [],
+    }
+    if df is not None:
+        if 'Region' in df.columns:
+            dim_values['REGION'] = sorted(df['Region'].dropna().unique().tolist())
+        if 'Channel' in df.columns:
+            dim_values['CHANNEL'] = sorted(df['Channel'].dropna().unique().tolist())
+        if 'Category Channel' in df.columns:
+            dim_values['CATEGORY CHANNEL'] = sorted(df['Category Channel'].dropna().unique().tolist())
+        if 'Channel' in df.columns and 'Account' in df.columns:
+            pairs = (df[['Channel', 'Account']].dropna()
+                     .drop_duplicates()
+                     .sort_values(['Channel', 'Account']))
+            dim_values['CHANNEL-ACCOUNT'] = [
+                f'{r.Channel} - {r.Account}' for r in pairs.itertuples()
+            ]
+
+    # Gabungkan: targets_existing dari dashboard + data nyata
+    all_needed = {}
+    for (dim, nama), val in targets_existing.items():
+        all_needed[(dim, nama)] = val
+    for dim, names in dim_values.items():
+        all_needed.setdefault((dim, 'DEFAULT'), DEFAULT_TARGET)
+        for nama in names:
+            all_needed.setdefault((dim, nama.upper()), DEFAULT_TARGET)
+    if not all_needed:
+        for dim in dim_values:
+            all_needed[(dim, 'DEFAULT')] = DEFAULT_TARGET
+
+    # Tentukan entri yang perlu ditambahkan (belum ada di sheet)
+    new_rows = []
+    dim_order = ['REGION', 'CHANNEL', 'CATEGORY CHANNEL', 'CHANNEL-ACCOUNT']
+    for dim in dim_order:
+        dim_entries = sorted(
+            [(nama, val) for (d, nama), val in all_needed.items() if d == dim],
+            key=lambda x: (x[0] != 'DEFAULT', x[0])
+        )
+        for nama, val in dim_entries:
+            if (dim, nama) not in existing_keys:
+                new_rows.append([dim, nama, val])
+
+    if not existing_rows:
+        # Sheet kosong — tulis header + semua entri
+        header = [['Dimension', 'Name', 'Target (%)']]
+        dim_order_rows = []
+        for dim in dim_order:
+            dim_entries = sorted(
+                [(nama, val) for (d, nama), val in all_needed.items() if d == dim],
+                key=lambda x: (x[0] != 'DEFAULT', x[0])
+            )
+            for nama, val in dim_entries:
+                dim_order_rows.append([dim, nama, val])
+        try:
+            ws_targets.update(range_name='A1', values=header + dim_order_rows)
+            print(f'[INFO] Sheet TARGETS diinisialisasi: {len(dim_order_rows)} entri.')
+        except Exception as e:
+            print(f'[WARNING] Gagal inisialisasi sheet TARGETS: {e}')
+    elif new_rows:
+        # Sheet sudah ada — append entri yang belum ada
+        next_row = len(existing_rows) + 1
+        try:
+            ws_targets.update(range_name=f'A{next_row}', values=new_rows)
+            print(f'[INFO] Sheet TARGETS: ditambahkan {len(new_rows)} entri baru.')
+        except Exception as e:
+            print(f'[WARNING] Gagal update sheet TARGETS: {e}')
 
 
 # ─────────────────────────── BANGUN TABEL SOS ──────────────────
@@ -803,8 +932,8 @@ def tambahkan_chart_category_divisi(spreadsheet, ws_id, fmt_section):
 
 # ─────────────────────────── DASHBOARD ─────────────────────────
 
-def buat_dashboard(ws, df):
-    targets = baca_target_dari_dashboard(ws)
+def buat_dashboard(ws, df, ws_targets=None):
+    targets = baca_target_dari_dashboard(ws, ws_targets)
     hapus_semua_chart(ws.spreadsheet, ws.id)
     api_retry(ws.clear)
 
@@ -1304,13 +1433,14 @@ def proses_data():
             time.sleep(5)
 
     titles = [ws.title for ws in sheet.worksheets()]
-    for title in ['DASHBOARD', 'STORE DETAIL', 'VALIDATION_REPORT']:
+    for title in ['DASHBOARD', 'STORE DETAIL', 'VALIDATION_REPORT', 'TARGETS']:
         if title not in titles:
-            sheet.add_worksheet(title=title, rows=5000, cols=200)
+            sheet.add_worksheet(title=title, rows=500, cols=5)
 
-    ws_dashboard = sheet.worksheet('DASHBOARD')
-    ws_store     = sheet.worksheet('STORE DETAIL')
+    ws_dashboard  = sheet.worksheet('DASHBOARD')
+    ws_store      = sheet.worksheet('STORE DETAIL')
     ws_validation = sheet.worksheet('VALIDATION_REPORT')
+    ws_targets    = sheet.worksheet('TARGETS')
 
     df_raw = baca_semua_csv()
     if df_raw is None:
@@ -1318,7 +1448,11 @@ def proses_data():
 
     df, df_removed = validasi_data(df_raw)
 
-    buat_dashboard(ws_dashboard, df)
+    # Inisialisasi sheet TARGETS jika baru dibuat (kosong)
+    targets_from_dashboard = baca_target_dari_dashboard(ws_dashboard)
+    inisialisasi_ws_targets(ws_targets, targets_from_dashboard, df)
+
+    buat_dashboard(ws_dashboard, df, ws_targets)
     print('DASHBOARD berhasil diupdate!')
 
     buat_store_detail(ws_store, df)
