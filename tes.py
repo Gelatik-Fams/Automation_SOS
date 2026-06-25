@@ -348,6 +348,7 @@ def inisialisasi_ws_targets(ws_targets, targets_existing, df=None):
         'REGION': [],
         'CHANNEL': [],
         'CATEGORY CHANNEL': [],
+        'ACCOUNT GELATIK': [],
         'CHANNEL-ACCOUNT': [],
     }
     if df is not None:
@@ -357,6 +358,8 @@ def inisialisasi_ws_targets(ws_targets, targets_existing, df=None):
             dim_values['CHANNEL'] = sorted(df['Channel'].dropna().unique().tolist())
         if 'Category Channel' in df.columns:
             dim_values['CATEGORY CHANNEL'] = sorted(df['Category Channel'].dropna().unique().tolist())
+        if 'Account' in df.columns:
+            dim_values['ACCOUNT GELATIK'] = sorted(df['Account'].dropna().unique().tolist())
         if 'Channel' in df.columns and 'Account' in df.columns:
             pairs = (df[['Channel', 'Account']].dropna()
                      .drop_duplicates()
@@ -379,7 +382,7 @@ def inisialisasi_ws_targets(ws_targets, targets_existing, df=None):
 
     # Tentukan entri yang perlu ditambahkan (belum ada di sheet)
     new_rows = []
-    dim_order = ['REGION', 'CHANNEL', 'CATEGORY CHANNEL', 'CHANNEL-ACCOUNT']
+    dim_order = ['REGION', 'CHANNEL', 'ACCOUNT GELATIK', 'CATEGORY CHANNEL', 'CHANNEL-ACCOUNT']
     for dim in dim_order:
         dim_entries = sorted(
             [(nama, val) for (d, nama), val in all_needed.items() if d == dim],
@@ -943,6 +946,7 @@ def buat_dashboard(ws, df, ws_targets=None):
     single_levels = [
         ('REGION',           'Region',           'REGION'),
         ('CHANNEL',          'Channel',          'CHANNEL'),
+        ('ACCOUNT GELATIK',  'Account',          'ACCOUNT GELATIK'),
         ('CATEGORY CHANNEL', 'Category Channel', 'CATEGORY CHANNEL'),
     ]
 
