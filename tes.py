@@ -16,6 +16,8 @@ METRIC_LABELS = ['Indofood', 'Kompetitor', 'Total Facing', 'SOS%', 'Store Count'
 N_METRICS     = len(METRIC_LABELS)
 
 WEEK_ORDER = ['W1', 'W2', 'W3', 'W4', 'W5']
+UNKNOWN_SOURCE_DIVISION = 'UNKNOWN'
+METADATA_COLS_FOR_DEDUP = {'_source_file', 'Source Division'}
 
 
 # ─────────────────────────── HELPER ────────────────────────────
@@ -32,6 +34,108 @@ def col_letter(n):
 
 def is_competitor(series):
     return series.astype(str).str.contains('COMPETITOR', case=False, na=False)
+
+
+def extract_source_division_from_filename(filename):
+    """Ambil divisi dari segmen terakhir filename: Report Product - Mei 25 - Oil & Fat.csv."""
+    stem = os.path.splitext(os.path.basename(str(filename)))[0]
+    parts = [p.strip() for p in stem.split(' - ')]
+    if len(parts) >= 3 and parts[-1]:
+        return parts[-1]
+    return UNKNOWN_SOURCE_DIVISION
+
+
+def discover_report_product_files(base_dir='.'):
+    """Temukan semua Report Product CSV di root dan subfolder division."""
+    pattern = os.path.join(base_dir, '**', 'Report Product*.csv')
+    files = glob.glob(pattern, recursive=True)
+    return sorted(
+        files,
+        key=lambda p: os.path.relpath(p, base_dir).replace(os.sep, '/').lower()
+    )
+
+
+def display_csv_path(path, base_dir='.'):
+    return os.path.relpath(path, base_dir).replace(os.sep, '/')
+
+
+def count_files_by_source_division(files):
+    counts = {}
+    for f in files:
+        division = extract_source_division_from_filename(f)
+        counts[division] = counts.get(division, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def get_dashboard_division_options(df):
+    if 'Source Division' not in df.columns:
+        return ['ALL']
+    divisions = sorted(str(v) for v in df['Source Division'].dropna().unique())
+    return ['ALL'] + divisions
+
+
+def baca_dashboard_division_selector(ws, options):
+    try:
+        selected = str(ws.acell('B1').value or '').strip()
+    except Exception:
+        selected = ''
+    return selected if selected in options else 'ALL'
+
+
+def filter_dashboard_by_division(df, selected_division):
+    if selected_division == 'ALL' or 'Source Division' not in df.columns:
+        return df
+    return df[df['Source Division'].astype(str) == selected_division].copy()
+
+
+def buat_division_summary_rows(df):
+    rows = [['DIVISION SUMMARY'], ['Division', 'SOS%']]
+    if 'Source Division' not in df.columns:
+        df_i = df[~is_competitor(df['Product Code'])]
+        df_k = df[ is_competitor(df['Product Code'])]
+        fi = df_i['Facing'].sum()
+        fk = df_k['Facing'].sum()
+        total = fi + fk
+        rows.append(['ALL', round(fi / total * 100, 1) if total > 0 else 0])
+        return rows
+
+    summary = calc_sos(df, ['Source Division']).sort_values('Source Division')
+    for _, row in summary.iterrows():
+        rows.append([str(row['Source Division']), float(row['SOS%'])])
+    return rows
+
+
+def clear_dashboard_content(ws):
+    if hasattr(ws, 'batch_clear'):
+        api_retry(ws.batch_clear, ['A2:ZZZ'])
+    else:
+        api_retry(ws.clear)
+
+
+def terapkan_dropdown_division(ws, options):
+    try:
+        requests = [{
+            'setDataValidation': {
+                'range': {
+                    'sheetId': ws.id,
+                    'startRowIndex': 0,
+                    'endRowIndex': 1,
+                    'startColumnIndex': 1,
+                    'endColumnIndex': 2,
+                },
+                'rule': {
+                    'condition': {
+                        'type': 'ONE_OF_LIST',
+                        'values': [{'userEnteredValue': opt} for opt in options],
+                    },
+                    'strict': True,
+                    'showCustomUi': True,
+                },
+            }
+        }]
+        ws.spreadsheet.batch_update({'requests': requests})
+    except Exception as e:
+        print(f'Division dropdown error (diabaikan): {e}')
 
 
 def extract_parent_brand(brand_name, is_competitor=False):
@@ -430,40 +534,67 @@ def buat_tabel_sos_monthly(df, index_col, dim_label, semua_period, targets,
     df_i = df[~is_competitor(df['Product Code'])]
     df_k = df[ is_competitor(df['Product Code'])]
 
-    sos_monthly = calc_sos(df, [index_col, 'Period'])
+    index_cols = index_col if isinstance(index_col, list) else [index_col]
+    n_idx = len(index_cols)
+    target_col_idx = n_idx
+
+    sos_monthly = calc_sos(df, index_cols + ['Period'])
     ordered_periods = [p for p in semua_period if p in sos_monthly['Period'].unique()]
     n = len(ordered_periods)
 
     # ── Header ──
-    header1 = [index_col, 'TARGET']
-    header2 = ['', '']
+    header_labels = ['DIVISION' if c == 'Source Division' else c for c in index_cols]
+    header1 = header_labels + ['TARGET']
+    header2 = [''] * (n_idx + 1)
     for p in ordered_periods:
         header1 += [p, '', '', '']
         header2 += ['Indofood', 'Kompetitor', 'Total', 'SOS%']
 
     # ── Precompute fi/fk per (index_col, Period) ──
-    fi_grp = df_i.groupby([index_col, 'Period'])['Facing'].sum()
-    fk_grp = df_k.groupby([index_col, 'Period'])['Facing'].sum()
+    group_period_cols = index_cols + ['Period']
+    fi_grp = df_i.groupby(group_period_cols)['Facing'].sum()
+    fk_grp = df_k.groupby(group_period_cols)['Facing'].sum()
 
-    all_indices = sos_monthly[index_col].unique()
+    all_indices = (
+        sos_monthly[index_cols]
+        .drop_duplicates()
+        .sort_values(index_cols)
+        .itertuples(index=False, name=None)
+    )
 
     # ── Baris data ──
     data_rows = []
-    for idx in all_indices:
-        target_val  = get_target(targets, dim_label, idx)
-        row         = [str(idx), target_val]
+    division_totals = {}
+    for idx_tuple in all_indices:
+        target_name = idx_tuple[-1]
+        target_val  = get_target(targets, dim_label, target_name)
+        row         = [str(v) for v in idx_tuple] + [target_val]
 
         for p in ordered_periods:
-            fi  = int(round(fi_grp.get((idx, p), 0)))
-            fk  = int(round(fk_grp.get((idx, p), 0)))
+            grp_key = idx_tuple + (p,)
+            fi  = int(round(fi_grp.get(grp_key, 0)))
+            fk  = int(round(fk_grp.get(grp_key, 0)))
             tot = fi + fk
             sos = round(fi / tot * 100, 1) if tot > 0 else 0
             row += [fi, fk, tot, sos]
 
         data_rows.append(row)
+        if index_cols[0] == 'Source Division':
+            division_totals.setdefault(idx_tuple[0], []).append(idx_tuple)
+
+    if index_cols[0] == 'Source Division':
+        for division in sorted(division_totals):
+            sub_row = [f'{division} TOTAL'] + [''] * (n_idx - 1) + [get_target(targets, dim_label, 'GRAND TOTAL')]
+            for p in ordered_periods:
+                fi = int(round(df_i[(df_i['Source Division'] == division) & (df_i['Period'] == p)]['Facing'].sum()))
+                fk = int(round(df_k[(df_k['Source Division'] == division) & (df_k['Period'] == p)]['Facing'].sum()))
+                tot = fi + fk
+                sos = round(fi / tot * 100, 1) if tot > 0 else 0
+                sub_row += [fi, fk, tot, sos]
+            data_rows.append(sub_row)
 
     # ── Grand Total ──
-    grand    = ['GRAND TOTAL', get_target(targets, dim_label, 'GRAND TOTAL')]
+    grand    = ['GRAND TOTAL'] + [''] * (n_idx - 1) + [get_target(targets, dim_label, 'GRAND TOTAL')]
     gt_sos   = []
     for p in ordered_periods:
         fi  = int(round(df_i[df_i['Period'] == p]['Facing'].sum()))
@@ -476,12 +607,12 @@ def buat_tabel_sos_monthly(df, index_col, dim_label, semua_period, targets,
     rows     = [header1, header2] + data_rows + [grand]
     num_cols = len(header1)
 
-    sos_cols = [2 + 4*i + 3 for i in range(n)]
+    sos_cols = [n_idx + 1 + 4*i + 3 for i in range(n)]
 
     meta = {
         'num_cols'      : num_cols,
         'sos_col_indices': sos_cols,
-        'target_col_idx' : 1,
+        'target_col_idx' : target_col_idx,
     }
     return rows, meta
 
@@ -492,6 +623,89 @@ def buat_tabel_channel_account(df, semua_period, targets):
     [Channel | Account | TARGET | ←Jan 25→ | ←Feb 25→ | ... | AVG | COV | AKTUAL | %]
                                    fi fk tot %  fi fk tot %
     """
+    if 'Source Division' in df.columns:
+        index_cols = ['Source Division', 'Channel', 'Account']
+        subtotal_cols = ['Source Division', 'Channel']
+        target_col_idx = len(index_cols)
+
+        sos_monthly = calc_sos(df, index_cols + ['Period'])
+        ordered_periods = [p for p in semua_period if p in sos_monthly['Period'].unique()]
+        n = len(ordered_periods)
+
+        df_i = df[~is_competitor(df['Product Code'])]
+        df_k = df[ is_competitor(df['Product Code'])]
+
+        fi_grp = df_i.groupby(index_cols + ['Period'])['Facing'].sum()
+        fk_grp = df_k.groupby(index_cols + ['Period'])['Facing'].sum()
+
+        header1 = ['DIVISION', 'CHANNEL', 'ACCOUNT', 'TARGET']
+        header2 = ['', '', '', '']
+        for p in ordered_periods:
+            header1 += [p, '', '', '']
+            header2 += ['Indofood', 'Kompetitor', 'Total', 'SOS%']
+
+        all_indices = (
+            sos_monthly[index_cols]
+            .drop_duplicates()
+            .sort_values(index_cols)
+            .itertuples(index=False, name=None)
+        )
+
+        group_order = []
+        group_rows = {}
+        for idx_tuple in all_indices:
+            div, ch, acc = idx_tuple
+            subtotal_key = (div, ch)
+            if subtotal_key not in group_rows:
+                group_rows[subtotal_key] = []
+                group_order.append(subtotal_key)
+
+            target_val = get_target(targets, 'CHANNEL-ACCOUNT', f'{ch} - {acc}')
+            row = [str(div), str(ch), str(acc), target_val]
+
+            for p in ordered_periods:
+                grp_key = idx_tuple + (p,)
+                fi  = int(round(fi_grp.get(grp_key, 0)))
+                fk  = int(round(fk_grp.get(grp_key, 0)))
+                tot = fi + fk
+                sos = round(fi / tot * 100, 1) if tot > 0 else 0
+                row += [fi, fk, tot, sos]
+
+            group_rows[subtotal_key].append(row)
+
+        fi_sub = df_i.groupby(subtotal_cols + ['Period'])['Facing'].sum()
+        fk_sub = df_k.groupby(subtotal_cols + ['Period'])['Facing'].sum()
+
+        result_rows = []
+        for div, ch in group_order:
+            result_rows.extend(group_rows[(div, ch)])
+
+            sub_row = [str(div), f'{ch} TOTAL', '', '']
+            for p in ordered_periods:
+                sub_key = (div, ch, p)
+                fi  = int(round(fi_sub.get(sub_key, 0)))
+                fk  = int(round(fk_sub.get(sub_key, 0)))
+                tot = fi + fk
+                sos = round(fi / tot * 100, 1) if tot > 0 else 0
+                sub_row += [fi, fk, tot, sos]
+
+            result_rows.append(sub_row)
+
+        grand = ['GRAND TOTAL', '', '', '']
+        for p in ordered_periods:
+            fi  = int(round(df_i[df_i['Period'] == p]['Facing'].sum()))
+            fk  = int(round(df_k[df_k['Period'] == p]['Facing'].sum()))
+            tot = fi + fk
+            sos = round(fi / tot * 100, 1) if tot > 0 else 0
+            grand += [fi, fk, tot, sos]
+
+        rows = [header1, header2] + result_rows + [grand]
+        return rows, {
+            'num_cols'       : len(header1),
+            'sos_col_indices': [len(index_cols) + 1 + 4*i + 3 for i in range(n)],
+            'target_col_idx' : target_col_idx,
+        }
+
     sos_monthly = calc_sos(df, ['Channel', 'Account', 'Period'])
     ordered_periods = [p for p in semua_period if p in sos_monthly['Period'].unique()]
     n = len(ordered_periods)
@@ -937,10 +1151,14 @@ def tambahkan_chart_category_divisi(spreadsheet, ws_id, fmt_section):
 
 def buat_dashboard(ws, df, ws_targets=None):
     targets = baca_target_dari_dashboard(ws, ws_targets)
-    hapus_semua_chart(ws.spreadsheet, ws.id)
-    api_retry(ws.clear)
+    division_options = get_dashboard_division_options(df)
+    selected_division = baca_dashboard_division_selector(ws, division_options)
+    df_dashboard = filter_dashboard_by_division(df, selected_division)
 
-    semua_period = sorted(df['Period'].unique(), key=sort_key_period)
+    hapus_semua_chart(ws.spreadsheet, ws.id)
+    clear_dashboard_content(ws)
+
+    semua_period = sorted(df_dashboard['Period'].unique(), key=sort_key_period)
 
     # Level tunggal: level_label, kolom_di_df, dim_key_untuk_targets
     single_levels = [
@@ -950,17 +1168,20 @@ def buat_dashboard(ws, df, ws_targets=None):
         ('CATEGORY CHANNEL', 'Category Channel', 'CATEGORY CHANNEL'),
     ]
 
-    all_rows     = []
+    all_rows     = [['DIVISION', selected_division], ['']]
+    all_rows.extend(buat_division_summary_rows(df))
+    all_rows.append([])
     fmt_sections = []
 
     # ── Section: single-column levels ──
     for label, col, dim_label in single_levels:
-        if col not in df.columns or df[col].dropna().empty:
+        if col not in df_dashboard.columns or df_dashboard[col].dropna().empty:
             continue
 
-        compliance_map = calc_compliance(df, col, targets, dim_label)
+        compliance_map = calc_compliance(df_dashboard, col, targets, dim_label)
+        dashboard_index_col = ['Source Division', col] if 'Source Division' in df_dashboard.columns else col
         table_rows, meta = buat_tabel_sos_monthly(
-            df, col, dim_label, semua_period, targets, compliance_map
+            df_dashboard, dashboard_index_col, dim_label, semua_period, targets, compliance_map
         )
 
         title_row   = len(all_rows) + 1
@@ -985,8 +1206,8 @@ def buat_dashboard(ws, df, ws_targets=None):
         all_rows.append([]); all_rows.append([])
 
     # ── Section: CHANNEL × ACCOUNT ──
-    if 'Channel' in df.columns and 'Account' in df.columns:
-        table_rows, meta = buat_tabel_channel_account(df, semua_period, targets)
+    if 'Channel' in df_dashboard.columns and 'Account' in df_dashboard.columns:
+        table_rows, meta = buat_tabel_channel_account(df_dashboard, semua_period, targets)
 
         title_row   = len(all_rows) + 1
         all_rows.append(['SOS% BY CHANNEL × ACCOUNT'])
@@ -1010,8 +1231,8 @@ def buat_dashboard(ws, df, ws_targets=None):
         all_rows.append([]); all_rows.append([])
 
     # ── Section: REGION x DIVISI ──
-    if 'Region' in df.columns and 'Category Channel' in df.columns:
-        table_rows, meta = buat_region_divisi_section(df, semua_period)
+    if False and 'Region' in df_dashboard.columns and 'Category Channel' in df_dashboard.columns:
+        table_rows, meta = buat_region_divisi_section(df_dashboard, semua_period)
 
         title_row   = len(all_rows) + 1
         all_rows.append(['SOS% BY REGION x DIVISI'])
@@ -1035,8 +1256,8 @@ def buat_dashboard(ws, df, ws_targets=None):
         all_rows.append([]); all_rows.append([])
 
     # ── Section: ACCOUNT x DIVISI ──
-    if 'Account' in df.columns and 'Category Channel' in df.columns:
-        table_rows, meta = buat_account_divisi_section(df, semua_period)
+    if False and 'Account' in df_dashboard.columns and 'Category Channel' in df_dashboard.columns:
+        table_rows, meta = buat_account_divisi_section(df_dashboard, semua_period)
 
         title_row   = len(all_rows) + 1
         all_rows.append(['SOS% BY ACCOUNT x DIVISI'])
@@ -1060,32 +1281,6 @@ def buat_dashboard(ws, df, ws_targets=None):
         all_rows.append([]); all_rows.append([])
 
     # ── Section: CATEGORY BY DIVISI ──
-    table_rows, meta = buat_category_divisi_section(df, semua_period, targets)
-
-    title_row   = len(all_rows) + 1
-    all_rows.append(['SOS% BY CATEGORY BY DIVISI'])
-    header1_row = len(all_rows) + 1
-    header2_row = len(all_rows) + 2
-    data_start  = len(all_rows) + 3
-    all_rows.extend(table_rows)
-    grand_row   = len(all_rows)
-
-    subtotal_rows_abs = [header1_row + i for i in meta.get('subtotal_rows', [])]
-
-    fmt_sections.append({
-        'label'          : 'CATEGORY BY DIVISI',
-        'title_row'      : title_row,
-        'header1_row'    : header1_row,
-        'header2_row'    : header2_row,
-        'data_start'     : data_start,
-        'grand_row'      : grand_row,
-        'num_cols'       : meta['num_cols'],
-        'sos_col_indices': meta['sos_col_indices'],
-        'target_col_idx' : meta['target_col_idx'],
-        'subtotal_rows'  : subtotal_rows_abs, 'cat_ranges': meta.get('cat_ranges', []), 'periods': meta.get('periods', []),
-    })
-    all_rows.append([]); all_rows.append([])
-
     if not fmt_sections:
         print('[WARNING] Tidak ada data untuk dashboard.')
         return
@@ -1096,6 +1291,7 @@ def buat_dashboard(ws, df, ws_targets=None):
     hapus_semua_formatting(ws, total_rows + 10, total_cols + 5)
     time.sleep(1)
     api_retry(ws.update, range_name='A1', values=all_rows)
+    terapkan_dropdown_division(ws, division_options)
     time.sleep(1)
 
     # Reset freeze
@@ -1267,7 +1463,7 @@ def buat_store_detail(ws, df):
 
 def validasi_data(df):
     n = len(df)
-    cols_to_check = [c for c in df.columns if c != '_source_file']
+    cols_to_check = [c for c in df.columns if c not in METADATA_COLS_FOR_DEDUP]
     df_clean_no_src = df[cols_to_check].drop_duplicates()
     df_clean = df.loc[df_clean_no_src.index]
     df_removed = df[~df.index.isin(df_clean.index)].copy()
@@ -1282,20 +1478,25 @@ def validasi_data(df):
 
 
 def baca_semua_csv():
-    files = sorted(glob.glob('Report Product*.csv'))
+    base_dir = '.'
+    files = discover_report_product_files(base_dir)
     if not files:
         print('[WARNING] Tidak ada file CSV ditemukan.')
         return None
 
     print(f'[INFO] Membaca {len(files)} file:')
+    print('[INFO] File Count by Source Division')
+    for division, count in count_files_by_source_division(files).items():
+        print(f'{division:<12} {count} files')
     dfs = []
     for f in files:
-        print(f'  -> {f}')
+        print(f'-> {display_csv_path(f, base_dir)}')
         try:
             df_temp = pd.read_csv(f, low_memory=False)
         except pd.errors.ParserError:
             df_temp = pd.read_csv(f, sep=';', low_memory=False)
         df_temp['_source_file'] = os.path.splitext(os.path.basename(f))[0]
+        df_temp['Source Division'] = extract_source_division_from_filename(f)
         dfs.append(df_temp)
 
     combined = pd.concat(dfs, ignore_index=True)
@@ -1412,6 +1613,8 @@ def buat_validation_report(ws, df_removed):
         ])
     except Exception as e:
         print(f'[WARNING] Formatting validation report: {e}')
+        
+    terapkan_filter(ws, detail_start_row)
 
 
 # ─────────────────────────── MAIN PROCESS ──────────────────────
