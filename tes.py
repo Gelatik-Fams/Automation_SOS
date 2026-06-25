@@ -1066,6 +1066,7 @@ def tambahkan_chart_category_divisi(spreadsheet, ws_id, fmt_section):
                     "chart": {
                         "spec": {
                             "title": f"{cat_name} - {p_name}",
+                            "hiddenDimensionStrategy": "SHOW_ALL",
                             "basicChart": {
                                 "chartType": "COLUMN",
                                 "legendPosition": "NO_LEGEND",
@@ -1147,13 +1148,126 @@ def tambahkan_chart_category_divisi(spreadsheet, ws_id, fmt_section):
             print(f'Gagal menambahkan chart: {e}')
 
 
+def tambahkan_chart_division_summary(spreadsheet, ws_id, summary_section):
+    data_start = summary_section['data_start']
+    data_end = summary_section['data_end']
+    if data_end < data_start:
+        return
+
+    chart_req = {
+        "addChart": {
+            "chart": {
+                "spec": {
+                    "title": "DIVISION SUMMARY",
+                    "hiddenDimensionStrategy": "SHOW_ALL",
+                    "basicChart": {
+                        "chartType": "COLUMN",
+                        "legendPosition": "NO_LEGEND",
+                        "axis": [
+                            {"position": "BOTTOM_AXIS", "title": "Division"},
+                            {"position": "LEFT_AXIS", "title": "SOS%"}
+                        ],
+                        "domains": [
+                            {
+                                "domain": {
+                                    "sourceRange": {
+                                        "sources": [
+                                            {
+                                                "sheetId": ws_id,
+                                                "startRowIndex": data_start - 1,
+                                                "endRowIndex": data_end,
+                                                "startColumnIndex": 0,
+                                                "endColumnIndex": 1
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        ],
+                        "series": [
+                            {
+                                "series": {
+                                    "sourceRange": {
+                                        "sources": [
+                                            {
+                                                "sheetId": ws_id,
+                                                "startRowIndex": data_start - 1,
+                                                "endRowIndex": data_end,
+                                                "startColumnIndex": 1,
+                                                "endColumnIndex": 2
+                                            }
+                                        ]
+                                    }
+                                },
+                                "targetAxis": "LEFT_AXIS",
+                                "dataLabel": {
+                                    "type": "DATA",
+                                    "textFormat": {
+                                        "fontSize": 10,
+                                        "bold": True,
+                                        "foregroundColorStyle": {
+                                            "rgbColor": {"red": 0.2, "green": 0.2, "blue": 0.2}
+                                        }
+                                    }
+                                }
+                            }
+                        ],
+                        "headerCount": 0
+                    }
+                },
+                "position": {
+                    "overlayPosition": {
+                        "anchorCell": {
+                            "sheetId": ws_id,
+                            "rowIndex": max(0, summary_section['title_row'] - 1),
+                            "columnIndex": 3
+                        },
+                        "offsetXPixels": 0,
+                        "offsetYPixels": 0,
+                        "widthPixels": 620,
+                        "heightPixels": 360
+                    }
+                }
+            }
+        }
+    }
+
+    try:
+        api_retry(spreadsheet.batch_update, {'requests': [chart_req]})
+        print('[INFO] Berhasil menambahkan chart DIVISION SUMMARY.')
+    except Exception as e:
+        print(f'Gagal menambahkan chart DIVISION SUMMARY: {e}')
+
+
+def sembunyikan_dashboard_row_ranges(ws, row_ranges):
+    requests = []
+    for start_row, end_row in row_ranges:
+        if end_row < start_row:
+            continue
+        requests.append({
+            'updateDimensionProperties': {
+                'range': {
+                    'sheetId': ws.id,
+                    'dimension': 'ROWS',
+                    'startIndex': start_row - 1,
+                    'endIndex': end_row,
+                },
+                'properties': {'hiddenByUser': True},
+                'fields': 'hiddenByUser',
+            }
+        })
+
+    if requests:
+        api_retry(ws.spreadsheet.batch_update, {'requests': requests})
+
+
 # ─────────────────────────── DASHBOARD ─────────────────────────
 
 def buat_dashboard(ws, df, ws_targets=None):
     targets = baca_target_dari_dashboard(ws, ws_targets)
     division_options = get_dashboard_division_options(df)
     selected_division = baca_dashboard_division_selector(ws, division_options)
-    df_dashboard = filter_dashboard_by_division(df, selected_division)
+    df_dashboard = df
 
     hapus_semua_chart(ws.spreadsheet, ws.id)
     clear_dashboard_content(ws)
@@ -1169,9 +1283,17 @@ def buat_dashboard(ws, df, ws_targets=None):
     ]
 
     all_rows     = [['DIVISION', selected_division], ['']]
-    all_rows.extend(buat_division_summary_rows(df))
+    division_summary_start = len(all_rows) + 1
+    division_summary_rows = buat_division_summary_rows(df)
+    all_rows.extend(division_summary_rows)
+    division_summary_section = {
+        'title_row': division_summary_start,
+        'data_start': division_summary_start + 2,
+        'data_end': division_summary_start + len(division_summary_rows) - 1,
+    }
     all_rows.append([])
     fmt_sections = []
+    hidden_row_ranges = []
 
     # ── Section: single-column levels ──
     for label, col, dim_label in single_levels:
@@ -1280,6 +1402,46 @@ def buat_dashboard(ws, df, ws_targets=None):
         })
         all_rows.append([]); all_rows.append([])
 
+    # Hidden chart source: CATEGORY BY DIVISI for selected division.
+    if (
+        'Source Division' in df_dashboard.columns
+        and 'Category Channel' in df_dashboard.columns
+        and 'Brand' in df_dashboard.columns
+    ):
+        for chart_division in [d for d in division_options if d != 'ALL']:
+            df_chart = filter_dashboard_by_division(df_dashboard, chart_division)
+            if df_chart.empty:
+                continue
+
+            table_rows, meta = buat_category_divisi_section(df_chart, semua_period, targets)
+            if meta.get('cat_ranges'):
+                title_row = len(all_rows) + 1
+                all_rows.append([f'CHART SOURCE CATEGORY BY DIVISI - {chart_division}'])
+                header1_row = len(all_rows) + 1
+                header2_row = len(all_rows) + 2
+                data_start = len(all_rows) + 3
+                all_rows.extend(table_rows)
+                grand_row = len(all_rows)
+                hidden_row_ranges.append((title_row, grand_row))
+
+                fmt_sections.append({
+                    'label'          : 'CATEGORY BY DIVISI',
+                    'title_row'      : title_row,
+                    'header1_row'    : header1_row,
+                    'header2_row'    : header2_row,
+                    'data_start'     : data_start,
+                    'grand_row'      : grand_row,
+                    'num_cols'       : meta['num_cols'],
+                    'sos_col_indices': meta['sos_col_indices'],
+                    'target_col_idx' : meta['target_col_idx'],
+                    'subtotal_rows'  : meta['subtotal_rows'],
+                    'cat_ranges'     : meta['cat_ranges'],
+                    'periods'        : meta['periods'],
+                    'chart_source'   : True,
+                    'division'       : chart_division,
+                })
+                all_rows.append([])
+
     # ── Section: CATEGORY BY DIVISI ──
     if not fmt_sections:
         print('[WARNING] Tidak ada data untuk dashboard.')
@@ -1292,6 +1454,7 @@ def buat_dashboard(ws, df, ws_targets=None):
     time.sleep(1)
     api_retry(ws.update, range_name='A1', values=all_rows)
     terapkan_dropdown_division(ws, division_options)
+    sembunyikan_dashboard_row_ranges(ws, hidden_row_ranges)
     time.sleep(1)
 
     # Reset freeze
@@ -1357,10 +1520,14 @@ def buat_dashboard(ws, df, ws_targets=None):
 
         print('Formatting dashboard berhasil!')
 
-        for s in fmt_sections:
-            if s['label'] == 'CATEGORY BY DIVISI':
-                tambahkan_chart_category_divisi(ws.spreadsheet, ws.id, s)
-                time.sleep(1)
+        if selected_division == 'ALL':
+            tambahkan_chart_division_summary(ws.spreadsheet, ws.id, division_summary_section)
+            time.sleep(1)
+        else:
+            for s in fmt_sections:
+                if s['label'] == 'CATEGORY BY DIVISI' and s.get('division') == selected_division:
+                    tambahkan_chart_category_divisi(ws.spreadsheet, ws.id, s)
+                    time.sleep(1)
 
     except ImportError:
         print('Install: pip install gspread-formatting')
