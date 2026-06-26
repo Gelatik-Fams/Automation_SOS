@@ -819,8 +819,7 @@ def buat_category_divisi_section(df, periods, targets):
 
     all_periods = sorted(df['Period'].unique(), key=sort_key_period)
 
-    categories = [c for c in ['BAG NOODLE', 'CUP NOODLE', 'REGULER NOODLE']
-                  if c in df['Category Channel'].unique()]
+    categories = sorted(str(x) for x in df['Category Channel'].dropna().unique())
 
     # Header baris 1
     header1 = ['Category by Divisi', 'Brand By Facing'] + all_periods + ['TOTAL']
@@ -935,8 +934,7 @@ def buat_region_divisi_section(df, periods):
     is_comp = is_competitor(df['Product Code'])
     df_i = df[~is_comp]
     
-    categories = [c for c in ['BAG NOODLE', 'CUP NOODLE', 'REGULER NOODLE']
-                  if c in df['Category Channel'].unique()]
+    categories = sorted(str(x) for x in df['Category Channel'].dropna().unique())
     
     ordered_periods = [p for p in periods if p in df['Period'].unique()]
     
@@ -946,8 +944,8 @@ def buat_region_divisi_section(df, periods):
     fi_nat = df_i.groupby(['Category Channel', 'Period'])['Facing'].sum()
     ft_nat = df.groupby(['Category Channel', 'Period'])['Facing'].sum()
     
-    header1 = ['REGION']
-    header2 = ['']
+    header1 = ['', 'REGION']
+    header2 = ['', '']
     for cat in categories:
         header1 += [cat] + [''] * (len(ordered_periods) - 1)
         header2 += ordered_periods
@@ -957,7 +955,7 @@ def buat_region_divisi_section(df, periods):
     regions = sorted([r for r in df['Region'].dropna().unique()])
     
     for r in regions:
-        row = [str(r).upper()]
+        row = ['', str(r).upper()]
         for cat in categories:
             for p in ordered_periods:
                 fi = int(round(fi_grp.get((r, cat, p), 0)))
@@ -966,7 +964,7 @@ def buat_region_divisi_section(df, periods):
                 row.append(f"{sos:.2f}%".replace('.', ','))
         rows.append(row)
         
-    gt_row = ['GRAND TOTAL']
+    gt_row = ['', 'GRAND TOTAL']
     for cat in categories:
         for p in ordered_periods:
             fi = int(round(fi_nat.get((cat, p), 0)))
@@ -989,8 +987,7 @@ def buat_account_divisi_section(df, periods):
     is_comp = is_competitor(df['Product Code'])
     df_i = df[~is_comp]
     
-    categories = [c for c in ['BAG NOODLE', 'CUP NOODLE', 'REGULER NOODLE']
-                  if c in df['Category Channel'].unique()]
+    categories = sorted(str(x) for x in df['Category Channel'].dropna().unique())
     
     ordered_periods = [p for p in periods if p in df['Period'].unique()]
     
@@ -1000,8 +997,8 @@ def buat_account_divisi_section(df, periods):
     fi_nat = df_i.groupby(['Category Channel', 'Period'])['Facing'].sum()
     ft_nat = df.groupby(['Category Channel', 'Period'])['Facing'].sum()
     
-    header1 = ['ACCOUNT']
-    header2 = ['']
+    header1 = ['', 'ACCOUNT']
+    header2 = ['', '']
     for cat in categories:
         header1 += [cat] + [''] * (len(ordered_periods) - 1)
         header2 += ordered_periods
@@ -1011,7 +1008,7 @@ def buat_account_divisi_section(df, periods):
     accounts = sorted([a for a in df['Account'].dropna().unique()])
     
     for a in accounts:
-        row = [str(a).upper()]
+        row = ['', str(a).upper()]
         for cat in categories:
             for p in ordered_periods:
                 fi = int(round(fi_grp.get((a, cat, p), 0)))
@@ -1020,7 +1017,7 @@ def buat_account_divisi_section(df, periods):
                 row.append(f"{sos:.2f}%".replace('.', ','))
         rows.append(row)
         
-    gt_row = ['GRAND TOTAL']
+    gt_row = ['', 'GRAND TOTAL']
     for cat in categories:
         for p in ordered_periods:
             fi = int(round(fi_nat.get((cat, p), 0)))
@@ -1148,7 +1145,7 @@ def tambahkan_chart_category_divisi(spreadsheet, ws_id, fmt_section):
             print(f'Gagal menambahkan chart: {e}')
 
 
-def tambahkan_chart_division_summary(spreadsheet, ws_id, summary_section):
+def tambahkan_chart_division_summary(spreadsheet, ws_id, summary_section, anchor_row):
     data_start = summary_section['data_start']
     data_end = summary_section['data_end']
     if data_end < data_start:
@@ -1219,7 +1216,7 @@ def tambahkan_chart_division_summary(spreadsheet, ws_id, summary_section):
                     "overlayPosition": {
                         "anchorCell": {
                             "sheetId": ws_id,
-                            "rowIndex": max(0, summary_section['title_row'] - 1),
+                            "rowIndex": anchor_row,
                             "columnIndex": 3
                         },
                         "offsetXPixels": 0,
@@ -1353,11 +1350,11 @@ def buat_dashboard(ws, df, ws_targets=None):
         all_rows.append([]); all_rows.append([])
 
     # ── Section: REGION x DIVISI ──
-    if False and 'Region' in df_dashboard.columns and 'Category Channel' in df_dashboard.columns:
+    if 'Region' in df_dashboard.columns and 'Category Channel' in df_dashboard.columns:
         table_rows, meta = buat_region_divisi_section(df_dashboard, semua_period)
 
         title_row   = len(all_rows) + 1
-        all_rows.append(['SOS% BY REGION x DIVISI'])
+        all_rows.append(['', 'SOS% BY REGION x DIVISI'])
         header1_row = len(all_rows) + 1
         header2_row = len(all_rows) + 2
         data_start  = len(all_rows) + 3
@@ -1378,11 +1375,11 @@ def buat_dashboard(ws, df, ws_targets=None):
         all_rows.append([]); all_rows.append([])
 
     # ── Section: ACCOUNT x DIVISI ──
-    if False and 'Account' in df_dashboard.columns and 'Category Channel' in df_dashboard.columns:
+    if 'Account' in df_dashboard.columns and 'Category Channel' in df_dashboard.columns:
         table_rows, meta = buat_account_divisi_section(df_dashboard, semua_period)
 
         title_row   = len(all_rows) + 1
-        all_rows.append(['SOS% BY ACCOUNT x DIVISI'])
+        all_rows.append(['', 'SOS% BY ACCOUNT x DIVISI'])
         header1_row = len(all_rows) + 1
         header2_row = len(all_rows) + 2
         data_start  = len(all_rows) + 3
@@ -1520,13 +1517,15 @@ def buat_dashboard(ws, df, ws_targets=None):
 
         print('Formatting dashboard berhasil!')
 
+        safe_anchor_row = total_rows + 2
+
         if selected_division == 'ALL':
-            tambahkan_chart_division_summary(ws.spreadsheet, ws.id, division_summary_section)
+            tambahkan_chart_division_summary(ws.spreadsheet, ws.id, division_summary_section, safe_anchor_row)
             time.sleep(1)
         else:
             for s in fmt_sections:
                 if s['label'] == 'CATEGORY BY DIVISI' and s.get('division') == selected_division:
-                    tambahkan_chart_category_divisi(ws.spreadsheet, ws.id, s)
+                    tambahkan_chart_category_divisi(ws.spreadsheet, ws.id, s, safe_anchor_row)
                     time.sleep(1)
 
     except ImportError:
@@ -1849,7 +1848,7 @@ if __name__ == '__main__':
     proses_data()  # proses langsung saat pertama dijalankan
 
     observer = PollingObserver()
-    observer.schedule(CSVHandler(), path='.', recursive=False)
+    observer.schedule(CSVHandler(), path='.', recursive=True)
     observer.start()
     print('Watchdog aktif! Menunggu perubahan CSV...')
 
