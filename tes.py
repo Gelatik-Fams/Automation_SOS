@@ -1036,7 +1036,7 @@ def buat_account_divisi_section(df, periods):
     return rows, meta
 
 
-def tambahkan_chart_category_divisi(spreadsheet, ws_id, fmt_section):
+def tambahkan_chart_category_divisi(spreadsheet, ws_id, fmt_section, anchor_row=None):
     requests = []
     
     data_start = fmt_section['data_start']
@@ -1044,8 +1044,8 @@ def tambahkan_chart_category_divisi(spreadsheet, ws_id, fmt_section):
     periods = fmt_section.get('periods', [])
     sos_cols = fmt_section.get('sos_col_indices', [])
     
-    # We want to place charts below the table.
-    anchor_row = fmt_section['grand_row'] + 2 
+    if anchor_row is None:
+        anchor_row = fmt_section['grand_row'] + 2
     
     for c_idx, cr in enumerate(cat_ranges):
         cat_name = cr['cat']
@@ -1496,8 +1496,9 @@ def buat_dashboard(ws, df, ws_targets=None):
             
             if 'subtotal_rows' in s:
                 for sr in s['subtotal_rows']:
+                    subtotal_row = s['header1_row'] + sr
                     cell_fmt.append(
-                        (f'A{sr}:{ec}{sr}', CellFormat(backgroundColor=BLUE_MED,
+                        (f'A{subtotal_row}:{ec}{subtotal_row}', CellFormat(backgroundColor=BLUE_MED,
                             textFormat=TextFormat(bold=True, foregroundColor=WHITE)))
                     )
 
