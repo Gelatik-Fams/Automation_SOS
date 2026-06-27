@@ -206,29 +206,6 @@ def get_target(targets, dim, nama):
            targets.get((dim_up, 'DEFAULT'), 65.0))
 
 
-def calc_compliance(df, index_col, targets, dim_label):
-    """
-    Hitung STORE COVERAGE, AKTUAL COMPLIANCE, % COMPLIANCE per nilai index_col.
-    Metrik dihitung atas semua period (kumulatif):
-      - STORE COVERAGE  = total toko unik yang dikunjungi
-      - AKTUAL COMPLIANCE = toko dengan SOS% kumulatif >= target
-      - % COMPLIANCE   = aktual / coverage × 100
-    Return: dict {str(nilai): (coverage, aktual, pct_str)}
-    """
-    store_sos = calc_sos(df, [index_col, 'Store Code'])
-
-    result = {}
-    for idx in store_sos[index_col].unique():
-        data     = store_sos[store_sos[index_col] == idx]
-        target   = get_target(targets, dim_label, idx)
-        coverage = len(data)
-        aktual   = len(data[data['SOS%'] >= target])
-        pct      = round(aktual / coverage * 100, 1) if coverage > 0 else 0
-        result[str(idx).upper()] = (coverage, aktual, pct)
-
-    return result
-
-
 # ─────────────────────────── FORMATTING ────────────────────────
 
 def hapus_semua_chart(spreadsheet, ws_id):
@@ -524,8 +501,7 @@ def inisialisasi_ws_targets(ws_targets, targets_existing, df=None):
 
 # ─────────────────────────── BANGUN TABEL SOS ──────────────────
 
-def buat_tabel_sos_monthly(df, index_col, dim_label, semua_period, targets,
-                            compliance_map=None):
+def buat_tabel_sos_monthly(df, index_col, dim_label, semua_period, targets):
     """
     Tabel SOS% per bulan dengan kolom Indofood | Kompetitor | Total | SOS% per period.
     [index | TARGET | ←Jan 25→ | ←Feb 25→ | ... | AVG | STORE COV. | AKTUAL | %]
@@ -1297,10 +1273,9 @@ def buat_dashboard(ws, df, ws_targets=None):
         if col not in df_dashboard.columns or df_dashboard[col].dropna().empty:
             continue
 
-        compliance_map = calc_compliance(df_dashboard, col, targets, dim_label)
         dashboard_index_col = ['Source Division', col] if 'Source Division' in df_dashboard.columns else col
         table_rows, meta = buat_tabel_sos_monthly(
-            df_dashboard, dashboard_index_col, dim_label, semua_period, targets, compliance_map
+            df_dashboard, dashboard_index_col, dim_label, semua_period, targets
         )
 
         title_row   = len(all_rows) + 1
