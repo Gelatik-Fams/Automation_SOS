@@ -1600,6 +1600,62 @@ def _write_rows(ws, rows):
         ws.append(row)
 
 
+def get_excel_conditional_format_ranges(payload):
+    ranges = []
+
+    for section in payload.get('fmt_sections', []):
+        if section.get('chart_source'):
+            continue
+
+        target_col = section.get('target_col_idx')
+        sos_cols = section.get('sos_col_indices') or []
+        if target_col is None or not sos_cols:
+            continue
+
+        excluded_rows = {section['grand_row']}
+        excluded_rows.update(
+            section['header1_row'] + subtotal_idx
+            for subtotal_idx in section.get('subtotal_rows', [])
+        )
+
+        row_runs = []
+        run_start = None
+        for row_number in range(section['data_start'], section['grand_row']):
+            if row_number in excluded_rows:
+                if run_start is not None:
+                    row_runs.append((run_start, row_number - 1))
+                    run_start = None
+                continue
+
+            if run_start is None:
+                run_start = row_number
+
+        if run_start is not None:
+            row_runs.append((run_start, section['grand_row'] - 1))
+
+        target_letter = col_letter(target_col)
+        subtotal_rows = sorted(excluded_rows - {section['grand_row']})
+
+        for sos_col in sos_cols:
+            sos_letter = col_letter(sos_col)
+            for start_row, end_row in row_runs:
+                ranges.append({
+                    'label': section.get('label'),
+                    'range': f'{sos_letter}{start_row}:{sos_letter}{end_row}',
+                    'start_row': start_row,
+                    'end_row': end_row,
+                    'sos_col_idx': sos_col,
+                    'sos_letter': sos_letter,
+                    'target_col_idx': target_col,
+                    'target_letter': target_letter,
+                    'grand_row': section['grand_row'],
+                    'subtotal_rows': subtotal_rows,
+                    'chart_source': bool(section.get('chart_source')),
+                })
+
+    return ranges
+
+
 def _format_excel_dashboard(ws, payload):
     fills = {
         'dark': PatternFill('solid', fgColor='215E9E'),
@@ -1651,21 +1707,21 @@ def _format_excel_dashboard(ws, payload):
                 cell.fill = fills['orange']
                 cell.font = bold_font
 
-            target_letter = col_letter(target_col)
-            for sos_col in section.get('sos_col_indices') or []:
-                sos_letter = col_letter(sos_col)
-                cell_range = f'{sos_letter}{section["data_start"]}:{sos_letter}{section["grand_row"]}'
+            for cf_range in get_excel_conditional_format_ranges({'fmt_sections': [section]}):
+                sos_letter = cf_range['sos_letter']
+                target_letter = cf_range['target_letter']
+                start_row = cf_range['start_row']
                 ws.conditional_formatting.add(
-                    cell_range,
+                    cf_range['range'],
                     FormulaRule(
-                        formula=[f'{sos_letter}{section["data_start"]}>=${target_letter}{section["data_start"]}'],
-                        fill=fills['green'],
+                        formula=[f'{sos_letter}{start_row}>=${target_letter}{start_row}'],
+                        fill=fills['light'],
                     ),
                 )
                 ws.conditional_formatting.add(
-                    cell_range,
+                    cf_range['range'],
                     FormulaRule(
-                        formula=[f'{sos_letter}{section["data_start"]}<${target_letter}{section["data_start"]}'],
+                        formula=[f'{sos_letter}{start_row}<${target_letter}{start_row}'],
                         fill=fills['red'],
                     ),
                 )
