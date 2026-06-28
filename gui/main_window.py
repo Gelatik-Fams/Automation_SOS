@@ -11,7 +11,7 @@ import customtkinter as ctk
 
 from gui.config import load_config, save_config, get_version, BASE_DIR
 from gui.logger import logger
-from gui.utils import validate_workbook, user_friendly_error, fmt_elapsed, detect_clusters
+from gui.utils import validate_workbook, user_friendly_error, fmt_elapsed, detect_clusters, detect_cluster_dirs
 from gui.widgets import (
     C_BLUE_DARK, C_BLUE_MED, C_BLUE_LIGHT, C_GREY_BG,
     C_GREEN, C_RED, C_WHITE, C_TEXT_DARK, C_TEXT_MUTED,
@@ -247,12 +247,7 @@ class MainWindow(ctk.CTk):
 
         orig_dir = os.getcwd()
         try:
-            dirs_to_process: list[tuple[str, str]] = []
-            if any(f.endswith('.csv') for f in os.listdir(self._folder)):
-                dirs_to_process.append((self._folder, os.path.basename(self._folder)))
-            for entry in sorted(os.scandir(self._folder), key=lambda e: e.name):
-                if entry.is_dir() and any(f.endswith('.csv') for f in os.listdir(entry.path)):
-                    dirs_to_process.append((entry.path, entry.name))
+            dirs_to_process = detect_cluster_dirs(self._folder)
 
             if not dirs_to_process:
                 self._q_log('[ERROR] Tidak ada CSV ditemukan di folder yang dipilih')
