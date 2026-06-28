@@ -8,9 +8,11 @@ except ImportError:
     gspread = None
 from openpyxl import Workbook, load_workbook
 from openpyxl.chart import BarChart, Reference
+from openpyxl.chart.data_source import AxDataSource, StrRef
 from openpyxl.chart.label import DataLabelList
 from openpyxl.formatting.rule import FormulaRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils.cell import quote_sheetname
 from watchdog.observers.polling import PollingObserver
 from watchdog.events import FileSystemEventHandler
 
@@ -1860,8 +1862,8 @@ def _format_excel_dashboard(ws, payload):
         'light': PatternFill('solid', fgColor='A3C2E3'),
         'grey': PatternFill('solid', fgColor='D9D9D9'),
         'orange': PatternFill('solid', fgColor='FF9933'),
-        'green': PatternFill('solid', fgColor='FFB6D7A8'),
-        'red': PatternFill('solid', fgColor='FFEA9999'),
+        'green': PatternFill(fill_type='solid', start_color='FFC4D79B', end_color='FFC4D79B'),
+        'red': PatternFill(fill_type='solid', start_color='FFE6B8B7', end_color='FFE6B8B7'),
     }
     white_font = Font(bold=True, color='FFFFFF')
     bold_font = Font(bold=True)
@@ -1950,6 +1952,8 @@ def _add_division_summary_chart(ws, summary_section, anchor_row):
     chart.title = 'DIVISION SUMMARY'
     chart.y_axis.title = 'SOS%'
     chart.x_axis.title = 'Division'
+    chart.x_axis.delete = False
+    chart.x_axis.tickLblPos = 'low'
     chart.legend = None
     chart.width = 20
     chart.height = 12
@@ -1976,7 +1980,14 @@ def _add_division_summary_chart(ws, summary_section, anchor_row):
 
     chart.add_data(data, titles_from_data=False)
     chart.set_categories(categories)
+    chart.series[0].cat = _excel_text_axis_ref(ws, 1, summary_section['data_start'], summary_section['data_end'])
     ws.add_chart(chart, f'D{anchor_row}')
+
+
+def _excel_text_axis_ref(ws, col, start_row, end_row):
+    sheet_name = quote_sheetname(ws.title)
+    col_name = col_letter(col - 1)
+    return AxDataSource(strRef=StrRef(f=f'{sheet_name}!${col_name}${start_row}:${col_name}${end_row}'))
 
 
 def _add_category_by_divisi_charts(ws, fmt_section, anchor_row):
@@ -2005,6 +2016,8 @@ def _add_category_by_divisi_charts(ws, fmt_section, anchor_row):
             chart.style = 10
             chart.title = f'{category_name} - {period_name}'
             chart.y_axis.title = 'SOS%'
+            chart.x_axis.delete = False
+            chart.x_axis.tickLblPos = 'low'
             chart.legend = None
             chart.width = 20
             chart.height = 12
@@ -2031,6 +2044,7 @@ def _add_category_by_divisi_charts(ws, fmt_section, anchor_row):
             )
             chart.add_data(data, titles_from_data=False)
             chart.set_categories(categories)
+            chart.series[0].cat = _excel_text_axis_ref(ws, 2, start_row, end_row)
 
             chart_row = anchor_row + category_index * EXCEL_CATEGORY_CHART_ROW_STEP
             chart_col = col_letter(base_col - 1 + period_index * chart_width_cols)
