@@ -28,7 +28,7 @@ METADATA_COLS_FOR_DEDUP = {'_source_file', 'Source Division'}
 TARGETS_FILENAME = 'TARGETS.xlsx'
 DEFAULT_TARGET = 65.0
 TARGET_DIM_ORDER = ['REGION', 'CHANNEL', 'ACCOUNT GELATIK', 'CATEGORY CHANNEL', 'CHANNEL-ACCOUNT']
-EXCEL_CATEGORY_CHART_ROW_STEP = 20
+EXCEL_CATEGORY_CHART_ROW_STEP = 28
 _last_excel_write_time = 0.0
 
 
@@ -1951,8 +1951,8 @@ def _add_division_summary_chart(ws, summary_section, anchor_row):
     chart.y_axis.title = 'SOS%'
     chart.x_axis.title = 'Division'
     chart.legend = None
-    chart.width = 18
-    chart.height = 10
+    chart.width = 20
+    chart.height = 12
 
     data = Reference(
         ws,
@@ -1998,8 +1998,8 @@ def _add_category_by_divisi_charts(ws, fmt_section, anchor_row):
             chart.title = f'{category_name} - {period_name}'
             chart.y_axis.title = 'SOS%'
             chart.legend = None
-            chart.width = 18
-            chart.height = 10
+            chart.width = 20
+            chart.height = 12
 
             chart.dLbls = DataLabelList()
             chart.dLbls.showVal = True
@@ -2032,7 +2032,7 @@ def _add_dashboard_charts(ws, payload):
     anchor_row = payload['total_rows'] + 3
     _add_division_summary_chart(ws, payload['division_summary_section'], anchor_row)
 
-    category_anchor_row = anchor_row + 20
+    category_anchor_row = anchor_row + EXCEL_CATEGORY_CHART_ROW_STEP
     for section in payload['fmt_sections']:
         if section.get('label') == 'CATEGORY BY DIVISI':
             _add_category_by_divisi_charts(ws, section, category_anchor_row)
