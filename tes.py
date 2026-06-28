@@ -8,6 +8,7 @@ except ImportError:
     gspread = None
 from openpyxl import Workbook, load_workbook
 from openpyxl.chart import BarChart, Reference
+from openpyxl.chart.label import DataLabelList
 from openpyxl.formatting.rule import FormulaRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from watchdog.observers.polling import PollingObserver
@@ -27,6 +28,8 @@ METADATA_COLS_FOR_DEDUP = {'_source_file', 'Source Division'}
 TARGETS_FILENAME = 'TARGETS.xlsx'
 DEFAULT_TARGET = 65.0
 TARGET_DIM_ORDER = ['REGION', 'CHANNEL', 'ACCOUNT GELATIK', 'CATEGORY CHANNEL', 'CHANNEL-ACCOUNT']
+EXCEL_CATEGORY_CHART_ROW_STEP = 20
+_last_excel_write_time = 0.0
 
 
 # ─────────────────────────── HELPER ────────────────────────────
@@ -426,6 +429,89 @@ def _target_rows_to_dict(target_rows):
         raise ValueError('TARGETS tidak valid: tidak ada data target.')
 
     return targets
+
+
+def _build_division_targets(target_rows, division):
+    """Build a (dim, name) → value dict scoped to one division.
+
+    Merges ALL-division rows (base) with division-specific rows (override),
+    so per-division values take precedence while global defaults still apply.
+    """
+    if not target_rows:
+        return default_targets_dict()
+    header = target_rows[0]
+    all_data = [r for r in target_rows[1:] if str(r[0] or '').strip().upper() == 'ALL']
+    div_data = [r for r in target_rows[1:] if r[0] == division]
+    merged = [header] + all_data + div_data
+    if len(merged) == 1:
+        merged = target_rows
+    return _target_rows_to_dict(merged)
+
+
+def _enrich_targets_with_df_values(df, target_rows):
+    """Append-only: tambah baris TARGETS untuk setiap nilai dimensi di df yang belum ada.
+
+    Nilai awal tiap baris baru = DEFAULT target untuk division+dim tersebut.
+    Baris yang sudah ada tidak pernah diubah.
+    """
+    DIM_COL_MAP = [
+        ('REGION',           'Region'),
+        ('CHANNEL',          'Channel'),
+        ('ACCOUNT GELATIK',  'Account'),
+        ('CATEGORY CHANNEL', 'Category Channel'),
+    ]
+
+    base = target_rows if target_rows else [['Division', 'Dimension', 'Name', 'Target']]
+
+    existing = set()
+    for row in base[1:]:
+        if len(row) >= 3 and row[0] is not None:
+            existing.add((str(row[0]).strip(), str(row[1]).strip().upper(), str(row[2]).strip().upper()))
+
+    def _seed(division, dim):
+        for scope in (division, 'ALL'):
+            for row in base[1:]:
+                if (len(row) >= 4
+                        and str(row[0]).strip() == scope
+                        and str(row[1]).strip().upper() == dim
+                        and str(row[2]).strip().upper() == 'DEFAULT'):
+                    try:
+                        return float(row[3])
+                    except (ValueError, TypeError):
+                        pass
+        return DEFAULT_TARGET
+
+    new_rows = []
+    for division in get_source_divisions(df):
+        df_div = filter_dashboard_by_division(df, division)
+
+        for dim, col in DIM_COL_MAP:
+            if col not in df_div.columns:
+                continue
+            seed = _seed(division, dim)
+            for val in sorted(str(v).strip().upper() for v in df_div[col].dropna().unique() if str(v).strip()):
+                if (division, dim, val) not in existing:
+                    new_rows.append([division, dim, val, seed])
+                    existing.add((division, dim, val))
+
+        if 'Channel' in df_div.columns and 'Account' in df_div.columns:
+            pairs = (df_div[['Channel', 'Account']]
+                     .drop_duplicates()
+                     .dropna()
+                     .sort_values(['Channel', 'Account']))
+            seed_ca = _seed(division, 'CHANNEL-ACCOUNT')
+            for _, r in pairs.iterrows():
+                ch, acc = str(r['Channel']).strip(), str(r['Account']).strip()
+                if not ch or not acc:
+                    continue
+                val = f'{ch} - {acc}'.upper()
+                if (division, 'CHANNEL-ACCOUNT', val) not in existing:
+                    new_rows.append([division, 'CHANNEL-ACCOUNT', val, seed_ca])
+                    existing.add((division, 'CHANNEL-ACCOUNT', val))
+
+    if not new_rows:
+        return target_rows
+    return base + new_rows
 
 
 def read_targets_from_workbook(path):
@@ -1678,9 +1764,10 @@ def _shift_section_rows(section, row_offset):
     return shifted
 
 
-def build_division_excel_payload(df, targets, division):
+def build_division_excel_payload(df, targets, division, target_rows=None):
+    division_targets = _build_division_targets(target_rows, division) if target_rows is not None else targets
     df_division = filter_dashboard_by_division(df, division)
-    payload = build_dashboard_payload(df_division, targets, selected_division=division)
+    payload = build_dashboard_payload(df_division, division_targets, selected_division=division)
     if payload is None:
         return None
 
@@ -1891,7 +1978,6 @@ def _add_category_by_divisi_charts(ws, fmt_section, anchor_row):
     if not cat_ranges or not periods or not sos_cols:
         return
 
-    chart_height_rows = 20
     chart_width_cols = 8
     base_col = 4
 
@@ -1915,6 +2001,13 @@ def _add_category_by_divisi_charts(ws, fmt_section, anchor_row):
             chart.width = 18
             chart.height = 10
 
+            chart.dLbls = DataLabelList()
+            chart.dLbls.showVal = True
+            chart.dLbls.showLegendKey = False
+            chart.dLbls.showPercent = False
+            chart.dLbls.showCatName = False
+            chart.dLbls.showSerName = False
+
             data = Reference(
                 ws,
                 min_col=sos_cols[period_index] + 1,
@@ -1930,7 +2023,7 @@ def _add_category_by_divisi_charts(ws, fmt_section, anchor_row):
             chart.add_data(data, titles_from_data=False)
             chart.set_categories(categories)
 
-            chart_row = anchor_row + category_index * chart_height_rows
+            chart_row = anchor_row + category_index * EXCEL_CATEGORY_CHART_ROW_STEP
             chart_col = col_letter(base_col - 1 + period_index * chart_width_cols)
             ws.add_chart(chart, f'{chart_col}{chart_row}')
 
@@ -2001,7 +2094,7 @@ def export_summary_excel(df, targets, output_dir='.', cluster_name=None, target_
     used_sheet_names = set()
     wrote_dashboard = False
     for division in divisions:
-        excel_payload = build_division_excel_payload(df, targets, division)
+        excel_payload = build_division_excel_payload(df, targets, division, target_rows=target_rows)
         if excel_payload is None:
             continue
 
@@ -2019,6 +2112,8 @@ def export_summary_excel(df, targets, output_dir='.', cluster_name=None, target_
 
     output_path = get_summary_output_path(output_dir, cluster_name, extension='.xlsx')
     wb.save(output_path)
+    global _last_excel_write_time
+    _last_excel_write_time = time.time()
     return output_path
 
 
@@ -2226,6 +2321,23 @@ def buat_dashboard(ws, df, ws_targets=None):
     hapus_conditional_format(ws.spreadsheet, ws.id)
     time.sleep(1)
 
+    safe_anchor_row = total_rows + 2
+
+    if selected_division == 'ALL':
+        try:
+            tambahkan_chart_division_summary(ws.spreadsheet, ws.id, division_summary_section, safe_anchor_row)
+            time.sleep(1)
+        except Exception as e:
+            print(f'Chart division summary error (diabaikan): {e}')
+    else:
+        for s in fmt_sections:
+            if s['label'] == 'CATEGORY BY DIVISI' and s.get('division') == selected_division:
+                try:
+                    tambahkan_chart_category_divisi(ws.spreadsheet, ws.id, s, safe_anchor_row)
+                    time.sleep(1)
+                except Exception as e:
+                    print(f'Chart category divisi error (diabaikan): {e}')
+
     try:
         from gspread_formatting import format_cell_ranges, CellFormat, Color, TextFormat
 
@@ -2254,7 +2366,7 @@ def buat_dashboard(ws, df, ws_targets=None):
             if s.get('target_col_idx') is not None:
                 tgt_col = col_letter(s['target_col_idx'])
                 cell_fmt.append((f'{tgt_col}{ds}:{tgt_col}{gr}', CellFormat(backgroundColor=ORANGE, textFormat=TextFormat(bold=True))))
-            
+
             if 'subtotal_rows' in s:
                 for sr in s['subtotal_rows']:
                     subtotal_row = s['header1_row'] + sr
@@ -2278,17 +2390,6 @@ def buat_dashboard(ws, df, ws_targets=None):
                 time.sleep(1)
 
         print('Formatting dashboard berhasil!')
-
-        safe_anchor_row = total_rows + 2
-
-        if selected_division == 'ALL':
-            tambahkan_chart_division_summary(ws.spreadsheet, ws.id, division_summary_section, safe_anchor_row)
-            time.sleep(1)
-        else:
-            for s in fmt_sections:
-                if s['label'] == 'CATEGORY BY DIVISI' and s.get('division') == selected_division:
-                    tambahkan_chart_category_divisi(ws.spreadsheet, ws.id, s, safe_anchor_row)
-                    time.sleep(1)
 
     except ImportError:
         print('Install: pip install gspread-formatting')
@@ -2563,6 +2664,10 @@ def proses_data():
 
     df, _df_removed = validasi_data(df_raw)
 
+    target_rows = _enrich_targets_with_df_values(df, target_rows)
+    if target_rows is not None:
+        targets_local = _target_rows_to_dict(target_rows)
+
     try:
         output_path = export_summary_excel(
             df,
@@ -2580,8 +2685,17 @@ def proses_data():
 
 class CSVHandler(FileSystemEventHandler):
     def on_any_event(self, event):
-        if event.event_type in ('modified', 'created') and event.src_path.endswith('.csv'):
-            print(f'File CSV terdeteksi: {event.src_path}')
+        if event.event_type not in ('modified', 'created'):
+            return
+        path = event.src_path
+        if path.endswith('.csv'):
+            print(f'File CSV terdeteksi: {path}')
+            time.sleep(2)
+            proses_data()
+        elif (path.endswith('.xlsx')
+              and os.path.basename(path).startswith('Summary SOS_')
+              and time.time() - _last_excel_write_time > 5):
+            print(f'File TARGETS berubah: {path}')
             time.sleep(2)
             proses_data()
 
