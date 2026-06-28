@@ -8,6 +8,16 @@ import pandas as pd
 import tes
 
 
+def dataframe_with_produsen(rows):
+    df = pd.DataFrame(rows)
+    if "Product Code" in df.columns and "Produsen" not in df.columns:
+        is_competitor = df["Product Code"].astype(str).str.contains(
+            "COMPETITOR", case=False, na=False
+        )
+        df["Produsen"] = is_competitor.map({True: "COMPETITOR", False: "INDOFOOD"})
+    return df
+
+
 class FakeSpreadsheet:
     def __init__(self):
         self.batch_updates = []
@@ -123,6 +133,30 @@ class AppsScriptRemovalTests(unittest.TestCase):
 
 
 class ValidationFreezeTests(unittest.TestCase):
+    def test_sos_classifies_competitor_from_produsen_not_product_code(self):
+        df = dataframe_with_produsen([
+            {
+                "Region": "BANDUNG",
+                "Period": "Jan 25",
+                "Produsen": "INDOFOOD",
+                "Product Code": "SKU001",
+                "Facing": 30,
+            },
+            {
+                "Region": "BANDUNG",
+                "Period": "Jan 25",
+                "Produsen": "COMPETITOR",
+                "Product Code": "'I401",
+                "Facing": 20,
+            },
+        ])
+
+        result = tes.calc_sos(df, ["Region"])
+
+        self.assertEqual(result.loc[0, "fi"], 30)
+        self.assertEqual(result.loc[0, "fk"], 20)
+        self.assertEqual(result.loc[0, "SOS%"], 60.0)
+
     def test_dashboard_does_not_keep_unused_compliance_dead_code(self):
         with open("tes.py", encoding="utf-8") as f:
             source = f.read()
@@ -131,7 +165,7 @@ class ValidationFreezeTests(unittest.TestCase):
             self.assertEqual(source.count(token), 0, token)
 
     def test_source_division_metadata_does_not_change_duplicate_detection(self):
-        df = pd.DataFrame([
+        df = dataframe_with_produsen([
             {
                 "_source_file": "Report Product - Jan 25 - Beverage",
                 "Source Division": "Beverage",
@@ -291,7 +325,7 @@ class ExcelExportTests(unittest.TestCase):
             comp["Source Division"] = division
             comp["Region"] = division
             extra.append(comp)
-        df = pd.concat([df, pd.DataFrame(extra)], ignore_index=True)
+        df = pd.concat([df, dataframe_with_produsen(extra)], ignore_index=True)
 
         with tempfile.TemporaryDirectory() as tmp:
             output_path = tes.export_summary_excel(
@@ -369,8 +403,15 @@ class ExcelExportTests(unittest.TestCase):
 
         self.assertTrue(pass_rules)
         self.assertTrue(fail_rules)
-        self.assertTrue(any(str(color).endswith("B6D7A8") for _, _, color in pass_rules))
-        self.assertTrue(any(str(color).endswith("EA9999") for _, _, color in fail_rules))
+        self.assertTrue(any(str(color).endswith("C4D79B") for _, _, color in pass_rules))
+        self.assertTrue(any(str(color).endswith("E6B8B7") for _, _, color in fail_rules))
+        cf_fonts = [
+            rule.dxf.font
+            for _cf_range, cf_rules in ws.conditional_formatting._cf_rules.items()
+            for rule in cf_rules
+            if rule.dxf
+        ]
+        self.assertTrue(all(font is None for font in cf_fonts))
         for _cell_range, formula, _color in rules:
             left, right = formula.split(">=") if ">=" in formula else formula.split("<")
             self.assertEqual(
@@ -430,7 +471,7 @@ class ExcelExportTests(unittest.TestCase):
     def test_excel_category_charts_have_data_labels_and_non_overlapping_category_rows(self):
         df = pd.concat([
             self.make_df(),
-            pd.DataFrame([
+            dataframe_with_produsen([
                 {
                     "Source Division": "Noodle",
                     "Region": "WEST",
@@ -472,6 +513,10 @@ class ExcelExportTests(unittest.TestCase):
         self.assertGreaterEqual(len(category_charts), 2)
         self.assertGreaterEqual(anchors[1] - anchors[0], tes.EXCEL_CATEGORY_CHART_ROW_STEP - 1)
         self.assertTrue(all(chart.dLbls and chart.dLbls.showVal for chart in category_charts))
+        self.assertTrue(all(chart.x_axis.delete is False for chart in category_charts))
+        self.assertTrue(all(chart.x_axis.tickLblPos == "low" for chart in category_charts))
+        self.assertTrue(all(chart.series and chart.series[0].cat is not None for chart in category_charts))
+        self.assertTrue(all(chart.series[0].cat.strRef is not None for chart in category_charts))
 
     def test_export_summary_excel_has_no_vba_dependency_or_macro_output(self):
         with open("tes.py", encoding="utf-8") as f:
@@ -506,7 +551,7 @@ class ExcelExportTests(unittest.TestCase):
 
 class StoreDetailTests(unittest.TestCase):
     def test_period_is_pivot_axis_not_left_identity_column(self):
-        df = pd.DataFrame([
+        df = dataframe_with_produsen([
             {
                 "Period": "Jan 25",
                 "Visit Date": pd.Timestamp("2025-01-02"),
@@ -558,7 +603,7 @@ class DashboardDivisionAwareTests(unittest.TestCase):
         tes.time.sleep = self._orig_sleep
 
     def make_dashboard_df(self):
-        return pd.DataFrame([
+        return dataframe_with_produsen([
             {
                 "Source Division": "Noodle",
                 "Region": "WEST",
@@ -610,7 +655,7 @@ class DashboardDivisionAwareTests(unittest.TestCase):
         ])
 
     def test_monthly_sos_table_can_group_by_source_division_and_region(self):
-        df = pd.DataFrame([
+        df = dataframe_with_produsen([
             {
                 "Source Division": "Noodle",
                 "Region": "WEST",
@@ -658,7 +703,7 @@ class DashboardDivisionAwareTests(unittest.TestCase):
         self.assertEqual(meta["sos_col_indices"], [6])
 
     def test_channel_account_table_keeps_source_divisions_separate(self):
-        df = pd.DataFrame([
+        df = dataframe_with_produsen([
             {
                 "Source Division": "Noodle",
                 "Channel": "MT",
