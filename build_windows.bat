@@ -5,6 +5,13 @@
 echo === Gelatik Automation Build ===
 echo.
 
+tasklist /FI "IMAGENAME eq Automation.exe" | find /I "Automation.exe" >nul
+if not errorlevel 1 (
+    echo ERROR: Automation.exe masih berjalan.
+    echo Tutup aplikasi Automation dulu, lalu jalankan build_windows.bat lagi.
+    exit /b 1
+)
+
 :: Install dependencies
 pip install -r requirements.txt pyinstaller
 
@@ -16,8 +23,8 @@ if exist build rmdir /s /q build
 pyinstaller Automation.spec --clean
 
 echo.
-if exist dist\Automation.exe (
-    echo BUILD SUCCESS: dist\Automation.exe
+if exist dist\Automation\Automation.exe (
+    echo BUILD SUCCESS: dist\Automation\Automation.exe
 ) else (
     echo BUILD FAILED
     exit /b 1
@@ -25,11 +32,11 @@ if exist dist\Automation.exe (
 
 :: Create release folder
 set RELEASE=dist\SOS Dashboard Automation
-mkdir "%RELEASE%"
-copy dist\Automation.exe "%RELEASE%\"
+if exist "%RELEASE%" rmdir /s /q "%RELEASE%"
+xcopy /E /I /Y "dist\Automation" "%RELEASE%"
 copy config.json "%RELEASE%\"
 copy README.md "%RELEASE%\"
-mkdir "%RELEASE%\logs"
+if not exist "%RELEASE%\logs" mkdir "%RELEASE%\logs"
 
 echo.
 echo Release folder: %RELEASE%
