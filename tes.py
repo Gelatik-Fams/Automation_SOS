@@ -10,7 +10,6 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.chart import BarChart, Reference
 from openpyxl.formatting.rule import FormulaRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-from openpyxl.worksheet.datavalidation import DataValidation
 from watchdog.observers.polling import PollingObserver
 from watchdog.events import FileSystemEventHandler
 
@@ -335,11 +334,19 @@ def terapkan_conditional_format(spreadsheet, ws_id, data_start_row, data_end_row
 
 # ─────────────────────────── TARGET ─────────────────────────────
 
-def default_target_rows():
-    return (
-        [['Dimension', 'Name', 'Target (%)']]
-        + [[dim, 'DEFAULT', DEFAULT_TARGET] for dim in TARGET_DIM_ORDER]
-    )
+def default_target_rows(divisions=None):
+    divisions = list(divisions or ['ALL'])
+    rows = [['Division', 'Dimension', 'Name', 'Target']]
+    for division in divisions:
+        rows.extend([[division, dim, 'DEFAULT', DEFAULT_TARGET] for dim in TARGET_DIM_ORDER])
+    return rows
+
+
+def default_targets_dict():
+    return {
+        (dim, 'DEFAULT'): DEFAULT_TARGET
+        for dim in TARGET_DIM_ORDER
+    }
 
 
 def buat_targets_excel_default(path=TARGETS_FILENAME):
@@ -355,7 +362,7 @@ def buat_targets_excel_default(path=TARGETS_FILENAME):
     thin = Side(style='thin', color='B7B7B7')
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
-    for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=3):
+    for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=4):
         for cell in row:
             cell.border = border
             cell.alignment = Alignment(vertical='center')
@@ -365,62 +372,104 @@ def buat_targets_excel_default(path=TARGETS_FILENAME):
         cell.font = header_font
         cell.alignment = Alignment(horizontal='center', vertical='center')
 
-    for cell in ws['C'][1:]:
+    for cell in ws['D'][1:]:
         cell.number_format = '0.0'
 
     ws.column_dimensions['A'].width = 24
-    ws.column_dimensions['B'].width = 34
-    ws.column_dimensions['C'].width = 14
+    ws.column_dimensions['B'].width = 24
+    ws.column_dimensions['C'].width = 34
+    ws.column_dimensions['D'].width = 14
     ws.freeze_panes = 'A2'
-    ws.auto_filter.ref = f'A1:C{ws.max_row}'
+    ws.auto_filter.ref = f'A1:D{ws.max_row}'
 
     wb.save(path)
 
 
 def _parse_target_value(value, row_number):
     if value is None or str(value).strip() == '':
-        raise ValueError(f'TARGETS.xlsx row {row_number}: nilai target kosong.')
+        raise ValueError(f'TARGETS row {row_number}: nilai target kosong.')
     try:
         if isinstance(value, str):
             value = value.replace('%', '').replace(',', '.').strip()
         return float(value)
     except ValueError as exc:
-        raise ValueError(f'TARGETS.xlsx row {row_number}: nilai target tidak valid ({value}).') from exc
+        raise ValueError(f'TARGETS row {row_number}: nilai target tidak valid ({value}).') from exc
 
 
-def baca_target_dari_excel(path=TARGETS_FILENAME):
-    try:
-        wb = load_workbook(path, data_only=True)
-    except Exception as exc:
-        raise ValueError(f'TARGETS.xlsx ada tetapi tidak bisa dibaca: {exc}') from exc
+def _target_rows_to_dict(target_rows):
+    if not target_rows:
+        raise ValueError('TARGETS tidak valid: tidak ada data target.')
 
-    if 'TARGETS' not in wb.sheetnames:
-        raise ValueError('TARGETS.xlsx tidak valid: sheet TARGETS tidak ditemukan.')
-
-    ws = wb['TARGETS']
-    header = [
-        str(ws.cell(row=1, column=col).value or '').strip().upper()
-        for col in range(1, 4)
-    ]
-    if header != ['DIMENSION', 'NAME', 'TARGET (%)']:
-        raise ValueError('TARGETS.xlsx tidak valid: header harus Dimension | Name | Target (%).')
+    header = [str(v or '').strip().upper() for v in target_rows[0]]
+    if header[:4] == ['DIVISION', 'DIMENSION', 'NAME', 'TARGET']:
+        dim_idx, name_idx, target_idx = 1, 2, 3
+    elif header[:3] == ['DIMENSION', 'NAME', 'TARGET (%)']:
+        dim_idx, name_idx, target_idx = 0, 1, 2
+    else:
+        raise ValueError('TARGETS tidak valid: header harus Division | Dimension | Name | Target.')
 
     targets = {}
-    for row_number in range(2, ws.max_row + 1):
-        dim = str(ws.cell(row=row_number, column=1).value or '').strip().upper()
-        nama = str(ws.cell(row=row_number, column=2).value or '').strip().upper()
-        target_value = ws.cell(row=row_number, column=3).value
+    for row_number, row in enumerate(target_rows[1:], start=2):
+        values = list(row) + [''] * 4
+        dim = str(values[dim_idx] or '').strip().upper()
+        nama = str(values[name_idx] or '').strip().upper()
+        target_value = values[target_idx]
 
         if not dim and not nama and (target_value is None or str(target_value).strip() == ''):
             continue
         if not dim or not nama:
-            raise ValueError(f'TARGETS.xlsx row {row_number}: Dimension dan Name wajib diisi.')
+            raise ValueError(f'TARGETS row {row_number}: Dimension dan Name wajib diisi.')
 
         targets[(dim, nama)] = _parse_target_value(target_value, row_number)
 
     if not targets:
-        raise ValueError('TARGETS.xlsx tidak valid: tidak ada data target.')
+        raise ValueError('TARGETS tidak valid: tidak ada data target.')
 
+    return targets
+
+
+def read_targets_from_workbook(path):
+    wb = None
+    try:
+        wb = load_workbook(path, data_only=True)
+    except Exception as exc:
+        raise ValueError(f'Workbook summary ada tetapi tidak bisa dibaca: {exc}') from exc
+
+    try:
+        if 'TARGETS' not in wb.sheetnames:
+            raise ValueError('Workbook summary tidak valid: sheet TARGETS tidak ditemukan.')
+
+        ws = wb['TARGETS']
+        max_col = max(ws.max_column, 4)
+        raw_rows = [
+            [ws.cell(row=row_number, column=col).value for col in range(1, max_col + 1)]
+            for row_number in range(1, ws.max_row + 1)
+        ]
+
+        header = [str(v or '').strip().upper() for v in raw_rows[0]]
+        if header[:4] == ['DIVISION', 'DIMENSION', 'NAME', 'TARGET']:
+            target_rows = [row[:4] for row in raw_rows]
+        elif header[:3] == ['DIMENSION', 'NAME', 'TARGET (%)']:
+            target_rows = [['Division', 'Dimension', 'Name', 'Target']]
+            for row in raw_rows[1:]:
+                values = list(row) + [''] * 3
+                target_rows.append(['ALL', values[0], values[1], values[2]])
+        else:
+            raise ValueError('TARGETS tidak valid: header harus Division | Dimension | Name | Target.')
+    finally:
+        wb.close()
+
+    return _target_rows_to_dict(target_rows), target_rows
+
+
+def load_or_create_summary_targets(summary_path):
+    if not os.path.exists(summary_path):
+        return default_targets_dict(), None
+    return read_targets_from_workbook(summary_path)
+
+
+def baca_target_dari_excel(path=TARGETS_FILENAME):
+    targets, _target_rows = read_targets_from_workbook(path)
     return targets
 
 
@@ -615,7 +664,7 @@ def inisialisasi_ws_targets(ws_targets, targets_existing, df=None):
 def buat_tabel_sos_monthly(df, index_col, dim_label, semua_period, targets):
     """
     Tabel SOS% per bulan dengan kolom Indofood | Kompetitor | Total | SOS% per period.
-    [index | TARGET | ←Jan 25→ | ←Feb 25→ | ... | AVG | STORE COV. | AKTUAL | %]
+    [index | TARGET | Jan 25→ | Feb 25→ | ... | AVG | STORE COV. | AKTUAL | %]
                       fi fk tot %   fi fk tot %
     """
     df_i = df[~is_competitor(df['Product Code'])]
@@ -707,7 +756,7 @@ def buat_tabel_sos_monthly(df, index_col, dim_label, semua_period, targets):
 def buat_tabel_channel_account(df, semua_period, targets):
     """
     Tabel SOS% Channel × Account dengan subtotal per Channel.
-    [Channel | Account | TARGET | ←Jan 25→ | ←Feb 25→ | ... | AVG | COV | AKTUAL | %]
+    [Channel | Account | TARGET | Jan 25→ | Feb 25→ | ... | AVG | COV | AKTUAL | %]
                                    fi fk tot %  fi fk tot %
     """
     if 'Source Division' in df.columns:
@@ -1600,6 +1649,67 @@ def _write_rows(ws, rows):
         ws.append(row)
 
 
+def sanitize_excel_sheet_name(name, used_names=None):
+    used_names = used_names or set()
+    cleaned = ''.join('_' if ch in r'[]:*?/\\' else ch for ch in str(name)).strip()
+    cleaned = cleaned or 'Division'
+    base = cleaned[:31]
+    candidate = base
+    suffix = 1
+    while candidate in used_names:
+        tail = f'_{suffix}'
+        candidate = f'{base[:31 - len(tail)]}{tail}'
+        suffix += 1
+    used_names.add(candidate)
+    return candidate
+
+
+def get_source_divisions(df):
+    if 'Source Division' not in df.columns:
+        return ['ALL']
+    return sorted(str(v) for v in df['Source Division'].dropna().unique())
+
+
+def _shift_section_rows(section, row_offset):
+    shifted = dict(section)
+    for key in ('title_row', 'header1_row', 'header2_row', 'data_start', 'grand_row'):
+        if key in shifted:
+            shifted[key] = shifted[key] + row_offset
+    return shifted
+
+
+def build_division_excel_payload(df, targets, division):
+    df_division = filter_dashboard_by_division(df, division)
+    payload = build_dashboard_payload(df_division, targets, selected_division=division)
+    if payload is None:
+        return None
+
+    payload = dashboard_payload_sos_only(payload)
+    rows = [list(row) for row in payload['rows'][2:]]
+    fmt_sections = []
+
+    for section in payload['fmt_sections']:
+        new_section = _shift_section_rows(section, -2)
+        if new_section.get('chart_source'):
+            title_row = new_section['title_row']
+            rows[title_row - 1] = ['CATEGORY BY DIVISI']
+            new_section.pop('chart_source', None)
+            new_section.pop('division', None)
+        fmt_sections.append(new_section)
+
+    result = dict(payload)
+    result['rows'] = rows
+    result['fmt_sections'] = fmt_sections
+    result['hidden_row_ranges'] = []
+    result['division_summary_section'] = {
+        key: value - 2
+        for key, value in payload['division_summary_section'].items()
+    }
+    result['total_rows'] = len(rows)
+    result['total_cols'] = max(s['num_cols'] for s in fmt_sections)
+    return result
+
+
 def get_excel_conditional_format_ranges(payload):
     ranges = []
 
@@ -1715,7 +1825,7 @@ def _format_excel_dashboard(ws, payload):
                     cf_range['range'],
                     FormulaRule(
                         formula=[f'{sos_letter}{start_row}>=${target_letter}{start_row}'],
-                        fill=fills['light'],
+                        fill=fills['green'],
                     ),
                 )
                 ws.conditional_formatting.add(
@@ -1741,13 +1851,6 @@ def _format_excel_dashboard(ws, payload):
         ws.column_dimensions[col_letter(col - 1)].width = 15
     ws.column_dimensions['A'].width = 22
     ws.column_dimensions['B'].width = 24
-
-
-def _add_dashboard_dropdown(ws, division_options):
-    formula = '"' + ','.join(division_options) + '"'
-    validation = DataValidation(type='list', formula1=formula, allow_blank=False)
-    ws.add_data_validation(validation)
-    validation.add(ws['B1'])
 
 
 def _add_division_summary_chart(ws, summary_section, anchor_row):
@@ -1781,410 +1884,83 @@ def _add_division_summary_chart(ws, summary_section, anchor_row):
     ws.add_chart(chart, f'D{anchor_row}')
 
 
-EXCEL_DASHBOARD_VBA_MODULE = r'''
-Option Explicit
+def _add_category_by_divisi_charts(ws, fmt_section, anchor_row):
+    cat_ranges = fmt_section.get('cat_ranges') or []
+    periods = fmt_section.get('periods') or []
+    sos_cols = fmt_section.get('sos_col_indices') or []
+    if not cat_ranges or not periods or not sos_cols:
+        return
 
-Private Type SourceRangeInfo
-    StartRow As Long
-    EndRow As Long
-    Division As String
-End Type
+    chart_height_rows = 20
+    chart_width_cols = 8
+    base_col = 4
 
-Public Sub ApplyDashboardDivisionFilter()
-    On Error GoTo Cleanup
+    for category_index, category_range in enumerate(cat_ranges):
+        category_name = category_range['cat']
+        start_row = fmt_section['data_start'] + category_range['start'] - 2
+        end_row = fmt_section['data_start'] + category_range['end'] - 3
+        if end_row < start_row:
+            continue
 
-    Dim ws As Worksheet
-    Set ws = ThisWorkbook.Worksheets("DASHBOARD")
+        for period_index, period_name in enumerate(periods):
+            if period_index >= len(sos_cols):
+                continue
 
-    Dim selected As String
-    selected = Trim(CStr(ws.Range("B1").Value))
-    If selected = "" Then selected = "ALL"
+            chart = BarChart()
+            chart.type = 'col'
+            chart.style = 10
+            chart.title = f'{category_name} - {period_name}'
+            chart.y_axis.title = 'SOS%'
+            chart.legend = None
+            chart.width = 18
+            chart.height = 10
 
-    Dim lastRow As Long
-    lastRow = GetDashboardLastRow(ws)
-    If lastRow < 2 Then Exit Sub
+            data = Reference(
+                ws,
+                min_col=sos_cols[period_index] + 1,
+                min_row=start_row,
+                max_row=end_row,
+            )
+            categories = Reference(
+                ws,
+                min_col=2,
+                min_row=start_row,
+                max_row=end_row,
+            )
+            chart.add_data(data, titles_from_data=False)
+            chart.set_categories(categories)
 
-    Application.ScreenUpdating = False
-    Application.EnableEvents = False
-
-    ws.Rows("1:" & lastRow).Hidden = False
-
-    Dim sources() As SourceRangeInfo
-    sources = GetDashboardChartSourceRanges(ws, lastRow)
-
-    Dim rowNumber As Long
-    If selected <> "ALL" Then
-        For rowNumber = 2 To lastRow
-            If Not ShouldShowDashboardRow( _
-                Trim(CStr(ws.Cells(rowNumber, 1).Value)), _
-                Trim(CStr(ws.Cells(rowNumber, 2).Value)), _
-                selected _
-            ) Then
-                ws.Rows(rowNumber).Hidden = True
-            End If
-        Next rowNumber
-    End If
-
-    SetDashboardChartSourceVisibility ws, sources, selected
-    RefreshDashboardCharts ws, sources, selected, lastRow
-
-Cleanup:
-    Application.EnableEvents = True
-    Application.ScreenUpdating = True
-End Sub
-
-Private Function GetDashboardLastRow(ws As Worksheet) As Long
-    Dim found As Range
-    Set found = ws.Cells.Find(What:="*", LookIn:=xlFormulas, SearchOrder:=xlByRows, SearchDirection:=xlPrevious)
-    If found Is Nothing Then
-        GetDashboardLastRow = 1
-    Else
-        GetDashboardLastRow = found.Row
-    End If
-End Function
-
-Private Function ShouldShowDashboardRow(colA As String, colB As String, selected As String) As Boolean
-    If colA = "" Then ShouldShowDashboardRow = True: Exit Function
-    If Left$(colA, 13) = "CHART SOURCE " Then ShouldShowDashboardRow = False: Exit Function
-    If colA = "DIVISION" Then ShouldShowDashboardRow = True: Exit Function
-    If colA = "DIVISION SUMMARY" Then ShouldShowDashboardRow = True: Exit Function
-    If colA = "Division" Then ShouldShowDashboardRow = True: Exit Function
-    If Left$(colA, 8) = "SOS% BY " Then ShouldShowDashboardRow = True: Exit Function
-    If colA = "GRAND TOTAL" Then ShouldShowDashboardRow = False: Exit Function
-    If colA = selected Then ShouldShowDashboardRow = True: Exit Function
-    If colA = selected & " TOTAL" Then ShouldShowDashboardRow = True: Exit Function
-    ShouldShowDashboardRow = False
-End Function
-
-Private Function GetDashboardChartSourceRanges(ws As Worksheet, lastRow As Long) As SourceRangeInfo()
-    Dim ranges() As SourceRangeInfo
-    ReDim ranges(0 To 0)
-    Dim count As Long
-    count = -1
-
-    Dim insideSource As Boolean
-    Dim currentStart As Long
-    Dim currentDivision As String
-    Dim rowNumber As Long
-    Dim colA As String
-
-    For rowNumber = 2 To lastRow
-        colA = Trim(CStr(ws.Cells(rowNumber, 1).Value))
-
-        If Left$(colA, 13) = "CHART SOURCE " Then
-            If insideSource Then
-                count = count + 1
-                ReDim Preserve ranges(0 To count)
-                ranges(count).StartRow = currentStart
-                ranges(count).EndRow = rowNumber - 1
-                ranges(count).Division = currentDivision
-            End If
-            insideSource = True
-            currentStart = rowNumber
-            currentDivision = Replace(colA, "CHART SOURCE CATEGORY BY DIVISI - ", "")
-        ElseIf insideSource And colA = "GRAND TOTAL" Then
-            count = count + 1
-            ReDim Preserve ranges(0 To count)
-            ranges(count).StartRow = currentStart
-            ranges(count).EndRow = rowNumber
-            ranges(count).Division = currentDivision
-            insideSource = False
-            currentStart = 0
-            currentDivision = ""
-        End If
-    Next rowNumber
-
-    If insideSource Then
-        count = count + 1
-        ReDim Preserve ranges(0 To count)
-        ranges(count).StartRow = currentStart
-        ranges(count).EndRow = lastRow
-        ranges(count).Division = currentDivision
-    End If
-
-    GetDashboardChartSourceRanges = ranges
-End Function
-
-Private Sub SetDashboardChartSourceVisibility(ws As Worksheet, sources() As SourceRangeInfo, selected As String)
-    On Error GoTo NoSources
-    Dim i As Long
-    For i = LBound(sources) To UBound(sources)
-        If sources(i).StartRow = 0 Then GoTo NextSource
-        If selected <> "ALL" And selected <> "" And sources(i).Division = selected Then
-            ws.Rows(sources(i).StartRow & ":" & sources(i).EndRow).Hidden = False
-        Else
-            ws.Rows(sources(i).StartRow & ":" & sources(i).EndRow).Hidden = True
-        End If
-NextSource:
-    Next i
-NoSources:
-End Sub
-
-Private Sub RefreshDashboardCharts(ws As Worksheet, sources() As SourceRangeInfo, selected As String, lastRow As Long)
-    DeleteDashboardCharts ws
-
-    Dim anchorRow As Long
-    anchorRow = lastRow + 3
-
-    If selected = "ALL" Or selected = "" Then
-        InsertDivisionSummaryChart ws, anchorRow
-    Else
-        InsertCategoryByDivisionCharts ws, sources, selected, anchorRow
-    End If
-End Sub
-
-Private Sub DeleteDashboardCharts(ws As Worksheet)
-    Dim i As Long
-    For i = ws.ChartObjects.Count To 1 Step -1
-        ws.ChartObjects(i).Delete
-    Next i
-End Sub
-
-Private Sub InsertDivisionSummaryChart(ws As Worksheet, anchorRow As Long)
-    Dim titleRow As Long
-    titleRow = FindRowByColumnA(ws, "DIVISION SUMMARY")
-    If titleRow = 0 Then Exit Sub
-
-    Dim dataStart As Long
-    Dim dataEnd As Long
-    dataStart = titleRow + 2
-    dataEnd = dataStart
-    Do While Trim(CStr(ws.Cells(dataEnd, 1).Value)) <> ""
-        dataEnd = dataEnd + 1
-    Loop
-    dataEnd = dataEnd - 1
-    If dataEnd < dataStart Then Exit Sub
-
-    Dim chartObj As ChartObject
-    Set chartObj = ws.ChartObjects.Add( _
-        Left:=ws.Cells(anchorRow, 4).Left, _
-        Top:=ws.Cells(anchorRow, 4).Top, _
-        Width:=460, _
-        Height:=270 _
-    )
-    chartObj.Name = "dash_division_summary"
-    With chartObj.Chart
-        .ChartType = xlColumnClustered
-        .SetSourceData Source:=Union(ws.Range(ws.Cells(dataStart, 1), ws.Cells(dataEnd, 1)), ws.Range(ws.Cells(dataStart, 2), ws.Cells(dataEnd, 2)))
-        .HasTitle = True
-        .ChartTitle.Text = "DIVISION SUMMARY"
-        .HasLegend = False
-        .Axes(xlValue).HasTitle = True
-        .Axes(xlValue).AxisTitle.Text = "SOS%"
-    End With
-End Sub
-
-Private Sub InsertCategoryByDivisionCharts(ws As Worksheet, sources() As SourceRangeInfo, selected As String, anchorRow As Long)
-    Dim selectedSource As SourceRangeInfo
-    Dim foundSource As Boolean
-    On Error GoTo NoSources
-    Dim i As Long
-    For i = LBound(sources) To UBound(sources)
-        If sources(i).StartRow = 0 Then GoTo NextSource
-        If sources(i).Division = selected Then
-            selectedSource = sources(i)
-            foundSource = True
-            Exit For
-        End If
-NextSource:
-    Next i
-NoSources:
-    If Not foundSource Then Exit Sub
-
-    Dim headerRow As Long
-    Dim dataStart As Long
-    headerRow = selectedSource.StartRow + 1
-    dataStart = selectedSource.StartRow + 3
-
-    Dim periodColumns() As Long
-    Dim periodLabels() As String
-    Dim periodCount As Long
-    periodCount = 0
-
-    Dim colNumber As Long
-    colNumber = 3
-    Do While Trim(CStr(ws.Cells(headerRow, colNumber).Value)) <> "" And Trim(CStr(ws.Cells(headerRow, colNumber).Value)) <> "TOTAL"
-        periodCount = periodCount + 1
-        ReDim Preserve periodColumns(1 To periodCount)
-        ReDim Preserve periodLabels(1 To periodCount)
-        periodColumns(periodCount) = colNumber
-        periodLabels(periodCount) = Trim(CStr(ws.Cells(headerRow, colNumber).Value))
-        colNumber = colNumber + 1
-    Loop
-    If periodCount = 0 Then Exit Sub
-
-    Dim currentCategory As String
-    Dim currentStart As Long
-    Dim categoryIndex As Long
-    Dim rowNumber As Long
-    categoryIndex = 0
-
-    For rowNumber = dataStart To selectedSource.EndRow
-        Dim colA As String
-        Dim colB As String
-        colA = Trim(CStr(ws.Cells(rowNumber, 1).Value))
-        colB = Trim(CStr(ws.Cells(rowNumber, 2).Value))
-
-        Dim isGrandTotal As Boolean
-        Dim isSubtotal As Boolean
-        Dim isBrandRow As Boolean
-        isGrandTotal = (colA = "GRAND TOTAL")
-        isSubtotal = (Right$(colA, 6) = " Total")
-        isBrandRow = (colA <> "" And colB <> "" And Not isSubtotal And Not isGrandTotal)
-
-        If isBrandRow And currentCategory = "" Then
-            currentCategory = colA
-            currentStart = rowNumber
-        End If
-
-        If currentCategory <> "" And colA = currentCategory & " INDOFOOD Total" Then
-            AddCategoryCharts ws, currentCategory, currentStart, rowNumber - 2, periodColumns, periodLabels, periodCount, anchorRow, categoryIndex
-            categoryIndex = categoryIndex + 1
-            currentCategory = ""
-            currentStart = 0
-        End If
-    Next rowNumber
-End Sub
-
-Private Sub AddCategoryCharts(ws As Worksheet, categoryName As String, startRow As Long, endRow As Long, periodColumns() As Long, periodLabels() As String, periodCount As Long, anchorRow As Long, categoryIndex As Long)
-    If endRow < startRow Then Exit Sub
-
-    Const CHART_WIDTH As Double = 360
-    Const CHART_HEIGHT As Double = 230
-    Const CHART_GAP_X As Double = 18
-    Const CHART_GAP_Y As Double = 28
-
-    Dim periodIndex As Long
-    For periodIndex = 1 To periodCount
-        Dim chartObj As ChartObject
-        Set chartObj = ws.ChartObjects.Add( _
-            Left:=ws.Cells(anchorRow, 4).Left + (periodIndex - 1) * (CHART_WIDTH + CHART_GAP_X), _
-            Top:=ws.Cells(anchorRow, 4).Top + categoryIndex * (CHART_HEIGHT + CHART_GAP_Y), _
-            Width:=CHART_WIDTH, _
-            Height:=CHART_HEIGHT _
-        )
-        chartObj.Name = "dash_category_" & categoryIndex & "_" & periodIndex
-        With chartObj.Chart
-            .ChartType = xlColumnClustered
-            .SeriesCollection.NewSeries
-            .SeriesCollection(1).XValues = ws.Range(ws.Cells(startRow, 2), ws.Cells(endRow, 2))
-            .SeriesCollection(1).Values = ws.Range(ws.Cells(startRow, periodColumns(periodIndex)), ws.Cells(endRow, periodColumns(periodIndex)))
-            .HasTitle = True
-            .ChartTitle.Text = categoryName & " - " & periodLabels(periodIndex)
-            .HasLegend = False
-            .Axes(xlValue).HasTitle = True
-            .Axes(xlValue).AxisTitle.Text = "SOS%"
-        End With
-    Next periodIndex
-End Sub
-
-Private Function FindRowByColumnA(ws As Worksheet, value As String) As Long
-    Dim lastRow As Long
-    lastRow = GetDashboardLastRow(ws)
-    Dim rowNumber As Long
-    For rowNumber = 1 To lastRow
-        If Trim(CStr(ws.Cells(rowNumber, 1).Value)) = value Then
-            FindRowByColumnA = rowNumber
-            Exit Function
-        End If
-    Next rowNumber
-    FindRowByColumnA = 0
-End Function
-'''
+            chart_row = anchor_row + category_index * chart_height_rows
+            chart_col = col_letter(base_col - 1 + period_index * chart_width_cols)
+            ws.add_chart(chart, f'{chart_col}{chart_row}')
 
 
-EXCEL_DASHBOARD_SHEET_VBA = r'''
-Option Explicit
+def _add_dashboard_charts(ws, payload):
+    anchor_row = payload['total_rows'] + 3
+    _add_division_summary_chart(ws, payload['division_summary_section'], anchor_row)
 
-Private Sub Worksheet_Change(ByVal Target As Range)
-    If Intersect(Target, Me.Range("B1")) Is Nothing Then Exit Sub
-    Debug.Print "DASHBOARD B1 changed" & ": " & CStr(Me.Range("B1").Value)
-    ApplyDashboardDivisionFilter
-End Sub
-'''
-
-
-EXCEL_THIS_WORKBOOK_VBA = r'''
-Option Explicit
-
-Private Sub Workbook_Open()
-    ApplyDashboardDivisionFilter
-End Sub
-'''
+    category_anchor_row = anchor_row + 20
+    for section in payload['fmt_sections']:
+        if section.get('label') == 'CATEGORY BY DIVISI':
+            _add_category_by_divisi_charts(ws, section, category_anchor_row)
 
 
-def get_dashboard_vba_standard_module():
-    return EXCEL_DASHBOARD_VBA_MODULE
-
-
-def get_dashboard_vba_sheet_module():
-    return EXCEL_DASHBOARD_SHEET_VBA
-
-
-def get_dashboard_vba_workbook_module():
-    return EXCEL_THIS_WORKBOOK_VBA
-
-
-def add_vba_to_workbook(xlsx_path, xlsm_path):
-    try:
-        import pythoncom
-        import win32com.client
-    except ImportError as exc:
-        raise RuntimeError('VBA export membutuhkan pywin32 dan Microsoft Excel.') from exc
-
-    excel = None
-    workbook = None
-    abs_xlsx = os.path.abspath(xlsx_path)
-    abs_xlsm = os.path.abspath(xlsm_path)
-
-    try:
-        pythoncom.CoInitialize()
-        excel = win32com.client.DispatchEx('Excel.Application')
-        excel.Visible = False
-        excel.DisplayAlerts = False
-        workbook = excel.Workbooks.Open(abs_xlsx)
-
-        vb_project = workbook.VBProject
-
-        module_component = vb_project.VBComponents.Add(1)
-        module_component.Name = 'DashboardInteractive'
-        module_component.CodeModule.AddFromString(get_dashboard_vba_standard_module())
-
-        dashboard_sheet = workbook.Worksheets('DASHBOARD')
-        sheet_component = vb_project.VBComponents(dashboard_sheet.CodeName)
-        sheet_component.CodeModule.AddFromString(get_dashboard_vba_sheet_module())
-
-        workbook_component = vb_project.VBComponents('ThisWorkbook')
-        workbook_component.CodeModule.AddFromString(get_dashboard_vba_workbook_module())
-
-        workbook.SaveAs(abs_xlsm, FileFormat=52)
-    except Exception as exc:
-        raise RuntimeError(
-            'Gagal membuat workbook interaktif VBA. Pastikan Microsoft Excel terinstall '
-            'dan Trust access to the VBA project object model aktif.'
-        ) from exc
-    finally:
-        if workbook is not None:
-            workbook.Close(SaveChanges=False)
-        if excel is not None:
-            excel.Quit()
-        try:
-            pythoncom.CoUninitialize()
-        except Exception:
-            pass
-
-
-def _write_targets_sheet(ws, targets):
-    rows = [['Dimension', 'Name', 'Target (%)']]
-    for dim in TARGET_DIM_ORDER:
-        entries = sorted(
-            [(name, val) for (target_dim, name), val in targets.items() if target_dim == dim],
-            key=lambda item: (item[0] != 'DEFAULT', item[0]),
-        )
-        if not entries:
-            entries = [('DEFAULT', DEFAULT_TARGET)]
-        for name, val in entries:
-            rows.append([dim, name, val])
+def _write_targets_sheet(ws, targets, target_rows=None, divisions=None):
+    if target_rows is None:
+        rows = [['Division', 'Dimension', 'Name', 'Target']]
+        divisions = list(divisions or ['ALL'])
+        for dim in TARGET_DIM_ORDER:
+            entries = sorted(
+                [(name, val) for (target_dim, name), val in targets.items() if target_dim == dim],
+                key=lambda item: (item[0] != 'DEFAULT', item[0]),
+            )
+            if not entries:
+                entries = [('DEFAULT', DEFAULT_TARGET)]
+            for division in divisions:
+                for name, val in entries:
+                    rows.append([division, dim, name, val])
+    else:
+        rows = [list(row[:4]) for row in target_rows]
 
     for row in rows:
         ws.append(row)
@@ -2194,7 +1970,7 @@ def _write_targets_sheet(ws, targets):
     thin = Side(style='thin', color='B7B7B7')
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
-    for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=3):
+    for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=4):
         for cell in row:
             cell.border = border
             cell.alignment = Alignment(vertical='center')
@@ -2202,48 +1978,44 @@ def _write_targets_sheet(ws, targets):
         cell.fill = header_fill
         cell.font = header_font
         cell.alignment = Alignment(horizontal='center', vertical='center')
-    for cell in ws['C'][1:]:
+    for cell in ws['D'][1:]:
         cell.number_format = '0.0'
 
     ws.column_dimensions['A'].width = 24
-    ws.column_dimensions['B'].width = 34
-    ws.column_dimensions['C'].width = 14
+    ws.column_dimensions['B'].width = 24
+    ws.column_dimensions['C'].width = 34
+    ws.column_dimensions['D'].width = 14
     ws.freeze_panes = 'A2'
-    ws.auto_filter.ref = f'A1:C{ws.max_row}'
+    ws.auto_filter.ref = f'A1:D{ws.max_row}'
 
 
-def export_summary_excel(df, targets, output_dir='.', cluster_name=None, enable_vba=False):
-    payload = build_dashboard_payload(df, targets, selected_division='ALL')
-    if payload is None:
+def export_summary_excel(df, targets, output_dir='.', cluster_name=None, target_rows=None):
+    divisions = get_source_divisions(df)
+    if not divisions:
         raise ValueError('Tidak ada data untuk dashboard.')
-    excel_payload = dashboard_payload_sos_only(payload)
 
     wb = Workbook()
-    ws_dashboard = wb.active
-    ws_dashboard.title = 'DASHBOARD'
+    default_sheet = wb.active
+    wb.remove(default_sheet)
+
+    used_sheet_names = set()
+    wrote_dashboard = False
+    for division in divisions:
+        excel_payload = build_division_excel_payload(df, targets, division)
+        if excel_payload is None:
+            continue
+
+        ws_dashboard = wb.create_sheet(sanitize_excel_sheet_name(division, used_sheet_names))
+        _write_rows(ws_dashboard, excel_payload['rows'])
+        _format_excel_dashboard(ws_dashboard, excel_payload)
+        _add_dashboard_charts(ws_dashboard, excel_payload)
+        wrote_dashboard = True
+
+    if not wrote_dashboard:
+        raise ValueError('Tidak ada data untuk dashboard.')
+
     ws_targets = wb.create_sheet('TARGETS')
-
-    _write_rows(ws_dashboard, excel_payload['rows'])
-    _add_dashboard_dropdown(ws_dashboard, excel_payload['division_options'])
-    _format_excel_dashboard(ws_dashboard, excel_payload)
-    _add_division_summary_chart(
-        ws_dashboard,
-        excel_payload['division_summary_section'],
-        excel_payload['total_rows'] + 2,
-    )
-
-    _write_targets_sheet(ws_targets, targets)
-
-    if enable_vba:
-        xlsx_path = get_summary_output_path(output_dir, cluster_name, extension='.xlsx')
-        xlsm_path = get_summary_output_path(output_dir, cluster_name, extension='.xlsm')
-        wb.save(xlsx_path)
-        add_vba_to_workbook(xlsx_path, xlsm_path)
-        try:
-            os.remove(xlsx_path)
-        except OSError:
-            pass
-        return xlsm_path
+    _write_targets_sheet(ws_targets, targets, target_rows=target_rows, divisions=divisions)
 
     output_path = get_summary_output_path(output_dir, cluster_name, extension='.xlsx')
     wb.save(output_path)
@@ -2776,18 +2548,11 @@ def buat_validation_report(ws, df_removed):
 # ─────────────────────────── MAIN PROCESS ──────────────────────
 
 def proses_data():
+    summary_path = get_summary_output_path('.', extension='.xlsx')
     try:
-        targets_local = load_or_create_local_targets(TARGETS_FILENAME)
+        targets_local, target_rows = load_or_create_summary_targets(summary_path)
     except ValueError as e:
         print(f'[ERROR] {e}')
-        return
-
-    if targets_local is None:
-        print(
-            'TARGETS.xlsx berhasil dibuat.\n\n'
-            'Silakan sesuaikan nilai target jika diperlukan,\n'
-            'kemudian jalankan kembali aplikasi.'
-        )
         return
 
     print('\nMemproses data...')
@@ -2799,8 +2564,13 @@ def proses_data():
     df, _df_removed = validasi_data(df_raw)
 
     try:
-        output_path = export_summary_excel(df, targets_local, output_dir='.', enable_vba=True)
-    except RuntimeError as e:
+        output_path = export_summary_excel(
+            df,
+            targets_local,
+            output_dir='.',
+            target_rows=target_rows,
+        )
+    except ValueError as e:
         print(f'[ERROR] {e}')
         return
     print(f'Summary SOS berhasil dibuat: {output_path}')
