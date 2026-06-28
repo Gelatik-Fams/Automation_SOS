@@ -36,13 +36,47 @@ def fmt_elapsed(seconds: float) -> str:
     return f'{m:02d}:{s:02d}'
 
 
+def _has_csv_anywhere(path: str) -> bool:
+    """True if path contains any .csv file in its entire subtree."""
+    for _, _, files in os.walk(path):
+        if any(f.endswith('.csv') for f in files):
+            return True
+    return False
+
+
 def detect_clusters(folder: str) -> list[str]:
+    """
+    Detect clusters in the browsed folder.
+
+    Rules:
+    - If the root folder itself contains .csv files → it IS the single cluster.
+    - Otherwise, each immediate subfolder that contains .csv files anywhere
+      in its subtree is treated as one cluster. The engine's recursive CSV
+      discovery (discover_report_product_files) will pick up all division
+      CSVs within that subtree and combine them into one workbook.
+
+    Example:
+        Indulgence/         ← user browses here → one cluster "Indulgence"
+            Noodle/
+                Report Product - Jan 25 - Noodle.csv
+            Nici/
+                Report Product - Jan 25 - Nici.csv
+        → Summary SOS_Indulgence.xlsx  (sheets: Noodle, Nici, TARGETS)
+
+        Automation/         ← user browses here → two clusters
+            Indulgence/     ← has CSVs in subtree → cluster 1
+            Nutrition/      ← has CSVs in subtree → cluster 2
+    """
     if not os.path.isdir(folder):
         return []
-    found = []
+
+    # Root folder has CSVs directly → treat it as the sole cluster
     if any(f.endswith('.csv') for f in os.listdir(folder)):
-        found.append(os.path.basename(folder))
+        return [os.path.basename(folder)]
+
+    # Otherwise each immediate subdir that has CSVs anywhere inside = one cluster
+    found = []
     for entry in sorted(os.scandir(folder), key=lambda e: e.name):
-        if entry.is_dir() and any(f.endswith('.csv') for f in os.listdir(entry.path)):
+        if entry.is_dir() and _has_csv_anywhere(entry.path):
             found.append(entry.name)
     return found

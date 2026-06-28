@@ -272,7 +272,7 @@ class MainWindow(ctk.CTk):
                 try:
                     os.chdir(cluster_dir)
 
-                    summary_path = tes.get_summary_output_path('.', extension='.xlsx')
+                    summary_path = tes.get_summary_output_path('.', cluster_name=cluster_name, extension='.xlsx')
                     targets_local, target_rows = tes.load_or_create_summary_targets(summary_path)
                     self._q_progress(base_prog + step * 0.1)
 
@@ -295,7 +295,8 @@ class MainWindow(ctk.CTk):
 
                     self._q_log(f'[INFO] Membuat Summary SOS_{cluster_name}.xlsx…')
                     output_path = tes.export_summary_excel(
-                        df, targets_local, output_dir='.', target_rows=target_rows
+                        df, targets_local, output_dir='.', cluster_name=cluster_name,
+                        target_rows=target_rows,
                     )
                     self._q_progress(base_prog + step * 0.90)
 
