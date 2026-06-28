@@ -103,8 +103,8 @@ def filter_dashboard_by_division(df, selected_division):
 def buat_division_summary_rows(df):
     rows = [['DIVISION SUMMARY'], ['Division', 'SOS%']]
     if 'Source Division' not in df.columns:
-        df_i = df[~is_competitor(df['Product Code'])]
-        df_k = df[ is_competitor(df['Product Code'])]
+        df_i = df[~is_competitor(df['Produsen'])]
+        df_k = df[ is_competitor(df['Produsen'])]
         fi = df_i['Facing'].sum()
         fk = df_k['Facing'].sum()
         total = fi + fk
@@ -179,8 +179,8 @@ def sort_key_period(label):
 
 def calc_sos(df, groupby_cols):
     """Hitung SOS% untuk sembarang groupby. Return df dengan fi, fk, total, SOS%."""
-    df_i = df[~is_competitor(df['Product Code'])]
-    df_k = df[ is_competitor(df['Product Code'])]
+    df_i = df[~is_competitor(df['Produsen'])]
+    df_k = df[ is_competitor(df['Produsen'])]
 
     fi = df_i.groupby(groupby_cols)['Facing'].sum().reset_index().rename(columns={'Facing': 'fi'})
     fk = df_k.groupby(groupby_cols)['Facing'].sum().reset_index().rename(columns={'Facing': 'fk'})
@@ -196,8 +196,8 @@ def calc_sos(df, groupby_cols):
 def hitung_sos(df, groupby_cols):
     """Untuk STORE DETAIL — kolom facing_indofood/kompetitor/SOS_% per Period."""
     g = groupby_cols + ['Period']
-    df_i = df[~is_competitor(df['Product Code'])]
-    df_k = df[ is_competitor(df['Product Code'])]
+    df_i = df[~is_competitor(df['Produsen'])]
+    df_k = df[ is_competitor(df['Produsen'])]
 
     fi = df_i.groupby(g)['Facing'].sum().reset_index().rename(columns={'Facing': 'facing_indofood'})
     fk = df_k.groupby(g)['Facing'].sum().reset_index().rename(columns={'Facing': 'facing_kompetitor'})
@@ -753,8 +753,8 @@ def buat_tabel_sos_monthly(df, index_col, dim_label, semua_period, targets):
     [index | TARGET | Jan 25→ | Feb 25→ | ... | AVG | STORE COV. | AKTUAL | %]
                       fi fk tot %   fi fk tot %
     """
-    df_i = df[~is_competitor(df['Product Code'])]
-    df_k = df[ is_competitor(df['Product Code'])]
+    df_i = df[~is_competitor(df['Produsen'])]
+    df_k = df[ is_competitor(df['Produsen'])]
 
     index_cols = index_col if isinstance(index_col, list) else [index_col]
     n_idx = len(index_cols)
@@ -854,8 +854,8 @@ def buat_tabel_channel_account(df, semua_period, targets):
         ordered_periods = [p for p in semua_period if p in sos_monthly['Period'].unique()]
         n = len(ordered_periods)
 
-        df_i = df[~is_competitor(df['Product Code'])]
-        df_k = df[ is_competitor(df['Product Code'])]
+        df_i = df[~is_competitor(df['Produsen'])]
+        df_k = df[ is_competitor(df['Produsen'])]
 
         fi_grp = df_i.groupby(index_cols + ['Period'])['Facing'].sum()
         fk_grp = df_k.groupby(index_cols + ['Period'])['Facing'].sum()
@@ -932,8 +932,8 @@ def buat_tabel_channel_account(df, semua_period, targets):
     ordered_periods = [p for p in semua_period if p in sos_monthly['Period'].unique()]
     n = len(ordered_periods)
 
-    df_i = df[~is_competitor(df['Product Code'])]
-    df_k = df[ is_competitor(df['Product Code'])]
+    df_i = df[~is_competitor(df['Produsen'])]
+    df_k = df[ is_competitor(df['Produsen'])]
 
     # Precompute fi/fk per (Channel, Account, Period)
     fi_grp = df_i.groupby(['Channel', 'Account', 'Period'])['Facing'].sum()
@@ -1029,7 +1029,7 @@ def buat_category_divisi_section(df, periods, targets):
     Indofood & Competitor di baris terpisah.
     Logic Period diadopsi dari progress1.
     """
-    is_comp = is_competitor(df['Product Code'])
+    is_comp = is_competitor(df['Produsen'])
 
     df = df.copy()
     if 'Period' not in df.columns:
@@ -1153,7 +1153,7 @@ def buat_category_divisi_section(df, periods, targets):
 
 
 def buat_region_divisi_section(df, periods):
-    is_comp = is_competitor(df['Product Code'])
+    is_comp = is_competitor(df['Produsen'])
     df_i = df[~is_comp]
     
     categories = sorted(str(x) for x in df['Category Channel'].dropna().unique())
@@ -1206,7 +1206,7 @@ def buat_region_divisi_section(df, periods):
 
 
 def buat_account_divisi_section(df, periods):
-    is_comp = is_competitor(df['Product Code'])
+    is_comp = is_competitor(df['Produsen'])
     df_i = df[~is_comp]
     
     categories = sorted(str(x) for x in df['Category Channel'].dropna().unique())
@@ -2499,7 +2499,7 @@ def validasi_data(df):
     df = df_clean
     if len(df) < n:
         print(f'[INFO] {n - len(df)} baris duplikat dihapus.')
-    df_i      = df[~is_competitor(df['Product Code'])]
+    df_i      = df[~is_competitor(df['Produsen'])]
     baris_nan = df_i[df_i['Facing'].isna()]
     if not baris_nan.empty:
         print(f'[WARNING] {len(baris_nan)} baris Indofood tidak punya Facing.')
