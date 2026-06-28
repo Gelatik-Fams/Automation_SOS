@@ -1,4 +1,4 @@
-import pandas as pd
+﻿import pandas as pd
 import time
 import os
 import glob
@@ -1860,8 +1860,8 @@ def _format_excel_dashboard(ws, payload):
         'light': PatternFill('solid', fgColor='A3C2E3'),
         'grey': PatternFill('solid', fgColor='D9D9D9'),
         'orange': PatternFill('solid', fgColor='FF9933'),
-        'green': PatternFill('solid', fgColor='B6D7A8'),
-        'red': PatternFill('solid', fgColor='EA9999'),
+        'green': PatternFill('solid', fgColor='FFB6D7A8'),
+        'red': PatternFill('solid', fgColor='FFEA9999'),
     }
     white_font = Font(bold=True, color='FFFFFF')
     bold_font = Font(bold=True)
@@ -1966,6 +1966,14 @@ def _add_division_summary_chart(ws, summary_section, anchor_row):
         min_row=summary_section['data_start'],
         max_row=summary_section['data_end'],
     )
+    chart.dLbls = DataLabelList()
+    chart.dLbls.showVal = True
+    chart.dLbls.showLegendKey = False
+    chart.dLbls.showPercent = False
+    chart.dLbls.showCatName = False
+    chart.dLbls.showSerName = False
+    chart.dLbls.dLblPos = 'outEnd'
+
     chart.add_data(data, titles_from_data=False)
     chart.set_categories(categories)
     ws.add_chart(chart, f'D{anchor_row}')
@@ -2007,6 +2015,7 @@ def _add_category_by_divisi_charts(ws, fmt_section, anchor_row):
             chart.dLbls.showPercent = False
             chart.dLbls.showCatName = False
             chart.dLbls.showSerName = False
+            chart.dLbls.dLblPos = 'outEnd'
 
             data = Reference(
                 ws,
