@@ -1,4 +1,4 @@
-import pandas as pd
+﻿import pandas as pd
 import time
 import os
 import glob
@@ -339,12 +339,6 @@ def terapkan_conditional_format(spreadsheet, ws_id, data_start_row, data_end_row
 
 # ─────────────────────────── TARGET ─────────────────────────────
 
-def _parse_target_float(s):
-    try:
-        return float(str(s).strip().replace('%', '').replace(',', '.'))
-    except (ValueError, AttributeError):
-        return None
-
 def default_target_rows(divisions=None):
     divisions = list(divisions or ['ALL'])
     rows = [['Division', 'Dimension', 'Name', 'Target']]
@@ -576,64 +570,31 @@ def load_or_create_local_targets(path=TARGETS_FILENAME):
 
 def baca_target_dari_ws_targets(ws_targets):
     """
-    Baca target dari sheet TARGETS (format 4-col: Division | Dimension | Name | Target %).
-    Gunakan api_retry agar tidak gagal karena rate limit setelah write sebelumnya.
+    Baca target dari sheet TARGETS.
+    Format sheet: baris header (Dimension | Name | Target), lalu data.
+    Contoh: REGION | BANDUNG | 70
     """
     try:
-        rows = api_retry(ws_targets.get_all_values)
+        rows = ws_targets.get_all_values()
     except Exception:
         return {}
 
-    SKIP_HEADERS = {'DIVISION', 'DIV', 'DIMENSION', 'DIM', 'TARGET SOS%', 'TARGET (%)'}
     targets = {}
-
     for row in rows:
-        cells = [str(c).strip() for c in row]
-
-        # Format 4-col: Division | Dimension | Name | Target (%)
-        if len(cells) >= 4:
-            val = _parse_target_float(cells[3])
-            if val is not None and cells[0] and cells[1] and cells[2]:
-                div, dim, nama = cells[0], cells[1], cells[2]
-                key = (div.upper(), dim.upper(), nama.upper())
-                if div.upper() not in SKIP_HEADERS and key not in targets:
-                    targets[key] = val  # keep first — user's row wins over script duplicates
-                    continue
-
-        # Fallback format 3-col lama (sebelum migrasi): Dimension | Name | Target
-        if len(cells) >= 3:
-            val = _parse_target_float(cells[2])
-            if val is not None and cells[0] and cells[1]:
-                dim, nama = cells[0], cells[1]
-                key = ('ALL', dim.upper(), nama.upper())
-                if dim.upper() not in SKIP_HEADERS and key not in targets:
-                    targets[key] = val  # keep first
-
+        if len(row) < 3:
+            continue
+        dim, nama, tgt_str = row[0].strip(), row[1].strip(), row[2].strip()
+        if not dim or not nama or not tgt_str:
+            continue
+        if dim.upper() in ('DIMENSION', 'DIM'):
+            continue  # skip header
+        try:
+            targets[(dim.upper(), nama.upper())] = float(
+                tgt_str.replace('%', '').replace(',', '.')
+            )
+        except ValueError:
+            pass
     return targets
-
-
-def get_merged_targets(targets, division='ALL'):
-    """
-    Gabungkan target ALL + divisi spesifik menjadi dict (dim, nama) → nilai.
-    Divisi spesifik override ALL. Format lama (dim, nama) selalu disertakan.
-    """
-    merged = {}
-    div_up = (division or 'ALL').upper()
-
-    for key, val in targets.items():
-        if len(key) == 2:
-            # format lama — selalu masuk
-            merged[key] = val
-        elif len(key) == 3 and key[0] == 'ALL':
-            merged[(key[1], key[2])] = val
-
-    # Override dengan entri divisi spesifik
-    if div_up != 'ALL':
-        for key, val in targets.items():
-            if len(key) == 3 and key[0] == div_up:
-                merged[(key[1], key[2])] = val
-
-    return merged
 
 
 def baca_target_dari_dashboard(ws, ws_targets=None):
@@ -690,107 +651,35 @@ def baca_target_dari_dashboard(ws, ws_targets=None):
     return targets
 
 
-def _parse_existing_targets(existing_rows):
+def inisialisasi_ws_targets(ws_targets, targets_existing, df=None):
     """
-    Baca existing_keys dan all_values dari baris TARGETS sheet.
-    Menangani format 4-col maupun 3-col lama.
-    """
-    existing_keys = set()
-    all_values = {}  # (dim, nama) → nilai; keep first occurrence
-    for row in existing_rows:
-        cells = [str(c).strip() for c in row]
-        if len(cells) >= 4 and _parse_target_float(cells[3]) is not None:
-            if cells[0] and cells[1] and cells[2]:
-                k3 = (cells[0].upper(), cells[1].upper(), cells[2].upper())
-                existing_keys.add(k3)
-                if cells[0].upper() == 'ALL':
-                    k2 = (cells[1].upper(), cells[2].upper())
-                    if k2 not in all_values:
-                        all_values[k2] = _parse_target_float(cells[3])
-        if len(cells) >= 3 and _parse_target_float(cells[2]) is not None:
-            if cells[0] and cells[1]:
-                existing_keys.add(('ALL', cells[0].upper(), cells[1].upper()))
-                k2 = (cells[0].upper(), cells[1].upper())
-                if k2 not in all_values:
-                    all_values[k2] = _parse_target_float(cells[2])
-    return existing_keys, all_values
-
-
-def _migrasi_targets_ke_4col(ws_targets, existing_rows):
-    """
-    Normalisasi TARGETS ke 4-col (Division | Dimension | Name | Target %).
-    Baris 3-col lama → Division='ALL'. Baris 4-col existing tetap.
-    Print backup ke console sebelum clear untuk recovery jika perlu.
-    Return True jika berhasil.
-    """
-    SKIP_H = {'DIVISION', 'DIV', 'DIMENSION', 'DIM', 'DIMENSI', 'NAMA',
-              'NAME', 'TARGET SOS%', 'TARGET (%)'}
-    header = [['Division', 'Dimension', 'Name', 'Target (%)']]
-    migrated = []
-
-    for row in existing_rows:
-        cells = [str(c).strip() for c in row]
-        # 4-col format sudah benar — pertahankan
-        if len(cells) >= 4 and _parse_target_float(cells[3]) is not None:
-            if cells[0] and cells[0].upper() not in SKIP_H:
-                migrated.append([cells[0], cells[1], cells[2], _parse_target_float(cells[3])])
-                continue
-        # 3-col format lama → tambah Division='ALL'
-        if len(cells) >= 3 and _parse_target_float(cells[2]) is not None:
-            if cells[0] and cells[0].upper() not in SKIP_H:
-                migrated.append(['ALL', cells[0], cells[1], _parse_target_float(cells[2])])
-
-    print(f'[INFO] Migrasi TARGETS: {len(existing_rows)} baris → {len(migrated)} entri 4-col.')
-    print('[INFO] Backup data lama (copy jika perlu recovery):')
-    for row in existing_rows:
-        if any(str(c).strip() for c in row):
-            print('  ' + ' | '.join(str(c).strip() for c in row))
-
-    try:
-        api_retry(ws_targets.clear)
-        api_retry(ws_targets.update, range_name='A1', values=header + migrated)
-        return True
-    except Exception as e:
-        print(f'[ERROR] Gagal migrasi TARGETS: {e}')
-        return False
-
-
-def inisialisasi_ws_targets(ws_targets, targets_existing=None, df=None):
-    """
-    Sinkronkan sheet TARGETS:
-    - Migrasi otomatis dari format 3-col ke 4-col (Division | Dimension | Name | Target %)
-    - Append entri baru yang belum ada (divisi baru dari data CSV)
-    - Seed nilai divisi baru dari nilai ALL yang sudah ada (bukan dari DEFAULT)
+    Sinkronkan sheet TARGETS: pertahankan nilai yang sudah ada,
+    tambahkan entri yang belum ada (misal CHANNEL-ACCOUNT baru).
     """
     DEFAULT_TARGET = 65
-    dim_order = ['REGION', 'CHANNEL', 'ACCOUNT GELATIK', 'CATEGORY CHANNEL', 'CHANNEL-ACCOUNT']
 
     try:
-        existing_rows = api_retry(ws_targets.get_all_values)
+        existing_rows = ws_targets.get_all_values()
     except Exception:
         existing_rows = []
 
-    # Deteksi apakah perlu migrasi: header A1 bukan 'Division'/'DIV'
-    a1 = str(existing_rows[0][0] if (existing_rows and existing_rows[0]) else '').strip().upper()
-    if existing_rows and a1 not in ('DIVISION', 'DIV', ''):
-        _migrasi_targets_ke_4col(ws_targets, existing_rows)
-        # Selalu re-read setelah migrasi (berhasil atau gagal) agar existing_rows = actual sheet
-        try:
-            existing_rows = api_retry(ws_targets.get_all_values)
-        except Exception:
-            existing_rows = []
+    # Baca entri yang sudah ada di sheet (beserta nilai targetnya)
+    existing_keys = {}  # (DIM, NAMA) -> baris ke-n (0-indexed)
+    for i, row in enumerate(existing_rows):
+        if len(row) < 2:
+            continue
+        dim, nama = row[0].strip().upper(), row[1].strip().upper()
+        if dim and nama and dim not in ('DIMENSION', 'DIM'):
+            existing_keys[(dim, nama)] = i
 
-    # Baca existing_keys dan all_values dari sheet (sudah 4-col setelah migrasi)
-    existing_keys, all_values = _parse_existing_targets(existing_rows)
-
-    # Kumpulkan semua divisi dari data
-    divisions = ['ALL']
-    if df is not None and 'Source Division' in df.columns:
-        divisions += sorted(str(v) for v in df['Source Division'].dropna().unique())
-
-    # Kumpulkan nilai dimensi dari data nyata
-    dim_values = {'REGION': [], 'CHANNEL': [], 'CATEGORY CHANNEL': [],
-                  'ACCOUNT GELATIK': [], 'CHANNEL-ACCOUNT': []}
+    # Kumpulkan semua kombinasi dari data nyata
+    dim_values = {
+        'REGION': [],
+        'CHANNEL': [],
+        'CATEGORY CHANNEL': [],
+        'ACCOUNT GELATIK': [],
+        'CHANNEL-ACCOUNT': [],
+    }
     if df is not None:
         if 'Region' in df.columns:
             dim_values['REGION'] = sorted(df['Region'].dropna().unique().tolist())
@@ -802,42 +691,65 @@ def inisialisasi_ws_targets(ws_targets, targets_existing=None, df=None):
             dim_values['ACCOUNT GELATIK'] = sorted(df['Account'].dropna().unique().tolist())
         if 'Channel' in df.columns and 'Account' in df.columns:
             pairs = (df[['Channel', 'Account']].dropna()
-                     .drop_duplicates().sort_values(['Channel', 'Account']))
+                     .drop_duplicates()
+                     .sort_values(['Channel', 'Account']))
             dim_values['CHANNEL-ACCOUNT'] = [
                 f'{r.Channel} - {r.Account}' for r in pairs.itertuples()
             ]
 
-    # Bangun entri yang belum ada — seed dari ALL, fallback DEFAULT
-    needed = []
-    for div in divisions:
-        for dim in dim_order:
-            for nama in dim_values.get(dim, []):
-                if (div.upper(), dim, nama.upper()) not in existing_keys:
-                    seed = all_values.get((dim, nama.upper()), DEFAULT_TARGET)
-                    needed.append([div, dim, nama, seed])
+    # Gabungkan: targets_existing dari dashboard + data nyata
+    all_needed = {}
+    for (dim, nama), val in targets_existing.items():
+        all_needed[(dim, nama)] = val
+    for dim, names in dim_values.items():
+        all_needed.setdefault((dim, 'DEFAULT'), DEFAULT_TARGET)
+        for nama in names:
+            all_needed.setdefault((dim, nama.upper()), DEFAULT_TARGET)
+    if not all_needed:
+        for dim in dim_values:
+            all_needed[(dim, 'DEFAULT')] = DEFAULT_TARGET
 
-    header = [['Division', 'Dimension', 'Name', 'Target (%)']]
+    # Tentukan entri yang perlu ditambahkan (belum ada di sheet)
+    new_rows = []
+    dim_order = ['REGION', 'CHANNEL', 'ACCOUNT GELATIK', 'CATEGORY CHANNEL', 'CHANNEL-ACCOUNT']
+    for dim in dim_order:
+        dim_entries = sorted(
+            [(nama, val) for (d, nama), val in all_needed.items() if d == dim],
+            key=lambda x: (x[0] != 'DEFAULT', x[0])
+        )
+        for nama, val in dim_entries:
+            if (dim, nama) not in existing_keys:
+                new_rows.append([dim, nama, val])
 
     if not existing_rows:
+        # Sheet kosong — tulis header + semua entri
+        header = [['Dimension', 'Name', 'Target (%)']]
+        dim_order_rows = []
+        for dim in dim_order:
+            dim_entries = sorted(
+                [(nama, val) for (d, nama), val in all_needed.items() if d == dim],
+                key=lambda x: (x[0] != 'DEFAULT', x[0])
+            )
+            for nama, val in dim_entries:
+                dim_order_rows.append([dim, nama, val])
         try:
-            ws_targets.update(range_name='A1', values=header + needed)
-            print(f'[INFO] Sheet TARGETS diinisialisasi: {len(needed)} entri.')
+            ws_targets.update(range_name='A1', values=header + dim_order_rows)
+            print(f'[INFO] Sheet TARGETS diinisialisasi: {len(dim_order_rows)} entri.')
         except Exception as e:
             print(f'[WARNING] Gagal inisialisasi sheet TARGETS: {e}')
-    elif needed:
+    elif new_rows:
+        # Sheet sudah ada — append entri yang belum ada
         next_row = len(existing_rows) + 1
         try:
-            ws_targets.update(range_name=f'A{next_row}', values=needed)
-            divs_added = sorted({r[0] for r in needed})
-            print(f'[INFO] Sheet TARGETS: +{len(needed)} entri baru ({", ".join(divs_added)}).')
+            ws_targets.update(range_name=f'A{next_row}', values=new_rows)
+            print(f'[INFO] Sheet TARGETS: ditambahkan {len(new_rows)} entri baru.')
         except Exception as e:
             print(f'[WARNING] Gagal update sheet TARGETS: {e}')
 
 
 # ─────────────────────────── BANGUN TABEL SOS ──────────────────
 
-def buat_tabel_sos_monthly(df, index_col, dim_label, semua_period, targets,
-                            compliance_map=None, raw_targets=None):
+def buat_tabel_sos_monthly(df, index_col, dim_label, semua_period, targets):
     """
     Tabel SOS% per bulan dengan kolom Indofood | Kompetitor | Total | SOS% per period.
     [index | TARGET | Jan 25→ | Feb 25→ | ... | AVG | STORE COV. | AKTUAL | %]
@@ -875,17 +787,11 @@ def buat_tabel_sos_monthly(df, index_col, dim_label, semua_period, targets,
     )
 
     # ── Baris data ──
-    has_div_col = (index_cols[0] == 'Source Division')
-
     data_rows = []
     division_totals = {}
     for idx_tuple in all_indices:
         target_name = idx_tuple[-1]
-        if has_div_col and raw_targets is not None:
-            row_targets = get_merged_targets(raw_targets, str(idx_tuple[0]))
-            target_val  = get_target(row_targets, dim_label, target_name)
-        else:
-            target_val  = get_target(targets, dim_label, target_name)
+        target_val  = get_target(targets, dim_label, target_name)
         row         = [str(v) for v in idx_tuple] + [target_val]
 
         for p in ordered_periods:
@@ -897,17 +803,12 @@ def buat_tabel_sos_monthly(df, index_col, dim_label, semua_period, targets,
             row += [fi, fk, tot, sos]
 
         data_rows.append(row)
-        if has_div_col:
+        if index_cols[0] == 'Source Division':
             division_totals.setdefault(idx_tuple[0], []).append(idx_tuple)
 
-    if has_div_col:
+    if index_cols[0] == 'Source Division':
         for division in sorted(division_totals):
-            if raw_targets is not None:
-                div_t = get_merged_targets(raw_targets, str(division))
-                grand_target = get_target(div_t, dim_label, 'GRAND TOTAL')
-            else:
-                grand_target = get_target(targets, dim_label, 'GRAND TOTAL')
-            sub_row = [f'{division} TOTAL'] + [''] * (n_idx - 1) + [grand_target]
+            sub_row = [f'{division} TOTAL'] + [''] * (n_idx - 1) + [get_target(targets, dim_label, 'GRAND TOTAL')]
             for p in ordered_periods:
                 fi = int(round(df_i[(df_i['Source Division'] == division) & (df_i['Period'] == p)]['Facing'].sum()))
                 fk = int(round(df_k[(df_k['Source Division'] == division) & (df_k['Period'] == p)]['Facing'].sum()))
@@ -940,7 +841,7 @@ def buat_tabel_sos_monthly(df, index_col, dim_label, semua_period, targets,
     return rows, meta
 
 
-def buat_tabel_channel_account(df, semua_period, targets, raw_targets=None):
+def buat_tabel_channel_account(df, semua_period, targets):
     """
     Tabel SOS% Channel × Account dengan subtotal per Channel.
     [Channel | Account | TARGET | Jan 25→ | Feb 25→ | ... | AVG | COV | AKTUAL | %]
@@ -983,11 +884,7 @@ def buat_tabel_channel_account(df, semua_period, targets, raw_targets=None):
                 group_rows[subtotal_key] = []
                 group_order.append(subtotal_key)
 
-            if raw_targets is not None:
-                div_targets = get_merged_targets(raw_targets, str(div))
-                target_val = get_target(div_targets, 'CHANNEL-ACCOUNT', f'{ch} - {acc}')
-            else:
-                target_val = get_target(targets, 'CHANNEL-ACCOUNT', f'{ch} - {acc}')
+            target_val = get_target(targets, 'CHANNEL-ACCOUNT', f'{ch} - {acc}')
             row = [str(div), str(ch), str(acc), target_val]
 
             for p in ordered_periods:
@@ -2244,11 +2141,9 @@ def export_summary_excel(df, targets, output_dir='.', cluster_name=None, target_
 
 
 def buat_dashboard(ws, df, ws_targets=None):
-    raw_targets = baca_target_dari_dashboard(ws, ws_targets)
+    targets = baca_target_dari_dashboard(ws, ws_targets)
     division_options = get_dashboard_division_options(df)
     selected_division = baca_dashboard_division_selector(ws, division_options)
-    # ALL sebagai base — lookup per-baris dilakukan by raw_targets di fungsi tabel
-    targets = get_merged_targets(raw_targets, 'ALL')
     df_dashboard = df
 
     hapus_semua_chart(ws.spreadsheet, ws.id)
@@ -2284,8 +2179,7 @@ def buat_dashboard(ws, df, ws_targets=None):
 
         dashboard_index_col = ['Source Division', col] if 'Source Division' in df_dashboard.columns else col
         table_rows, meta = buat_tabel_sos_monthly(
-            df_dashboard, dashboard_index_col, dim_label, semua_period, targets, compliance_map,
-            raw_targets=raw_targets
+            df_dashboard, dashboard_index_col, dim_label, semua_period, targets
         )
 
         title_row   = len(all_rows) + 1
@@ -2311,8 +2205,7 @@ def buat_dashboard(ws, df, ws_targets=None):
 
     # ── Section: CHANNEL × ACCOUNT ──
     if 'Channel' in df_dashboard.columns and 'Account' in df_dashboard.columns:
-        table_rows, meta = buat_tabel_channel_account(df_dashboard, semua_period, targets,
-                                                      raw_targets=raw_targets)
+        table_rows, meta = buat_tabel_channel_account(df_dashboard, semua_period, targets)
 
         title_row   = len(all_rows) + 1
         all_rows.append(['SOS% BY CHANNEL × ACCOUNT'])
