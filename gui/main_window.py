@@ -8,6 +8,7 @@ import traceback
 from pathlib import Path
 
 import customtkinter as ctk
+from PIL import Image
 
 from gui.config import load_config, save_config, get_version, BASE_DIR
 from gui.logger import logger
@@ -15,6 +16,8 @@ from gui.utils import validate_workbook, user_friendly_error, fmt_elapsed, detec
 from gui.widgets import (
     C_BLUE_DARK, C_BLUE_MED, C_BLUE_LIGHT, C_GREY_BG,
     C_GREEN, C_RED, C_WHITE, C_TEXT_DARK, C_TEXT_MUTED,
+    C_TERMINAL_BG, C_TERMINAL_FG, FONT_FAMILY,
+    FONT_HEADER, FONT_BODY, FONT_BODY_BOLD, FONT_CAPTION, FONT_BTN, FONT_LOG,
     SectionCard, ClusterRow,
 )
 
@@ -26,12 +29,17 @@ class MainWindow(ctk.CTk):
         self._cfg = load_config()
         version = get_version()
 
-        self.title(f'Gelatik Automation  v{version}')
+        self.title('Gelatik SOS Summary Automation')
         w = self._cfg.get('window_width', 860)
         h = self._cfg.get('window_height', 620)
         self.geometry(f'{w}x{h}')
         self.minsize(760, 560)
         self.configure(fg_color=C_GREY_BG)
+
+        # Set window icon (title bar + taskbar)
+        ico_path = BASE_DIR / 'assets' / 'app.ico'
+        if ico_path.exists():
+            self.iconbitmap(str(ico_path))
 
         self._folder: str = ''
         self._clusters: list[str] = []
@@ -57,42 +65,29 @@ class MainWindow(ctk.CTk):
     # ------------------------------------------------------------------
 
     def _build_ui(self):
-        version = get_version()
-
-        topbar = ctk.CTkFrame(self, fg_color=C_BLUE_DARK, height=52, corner_radius=0)
+        topbar = ctk.CTkFrame(self, fg_color=C_BLUE_DARK, height=56, corner_radius=0)
         topbar.pack(fill='x', side='top')
         topbar.pack_propagate(False)
 
+        # Load logo_gelatik.png into topbar
+        logo_path = BASE_DIR / 'assets' / 'logo_gelatik.png'
+        if logo_path.exists():
+            img = Image.open(logo_path).resize((32, 32))
+            self._logo_ctk = ctk.CTkImage(img, size=(32, 32))
+            ctk.CTkLabel(topbar, image=self._logo_ctk, text='').pack(side='left', padx=(16, 6), pady=12)
+
         ctk.CTkLabel(
             topbar,
-            text='Gelatik Automation',
-            font=ctk.CTkFont(family='Helvetica', size=15, weight='bold'),
+            text='Gelatik SOS Summary Automation',
+            font=ctk.CTkFont(family=FONT_FAMILY, size=15, weight='bold'),
             text_color=C_WHITE,
-        ).pack(side='left', padx=16, pady=10)
-
-        ctk.CTkLabel(
-            topbar,
-            text=f'v{version}',
-            font=ctk.CTkFont(size=10),
-            text_color='#6E90AE',
-        ).pack(side='left', padx=(0, 8), pady=10)
-
-        ctk.CTkButton(
-            topbar,
-            text='?',
-            width=28, height=28,
-            fg_color='transparent',
-            hover_color='#2E6DA4',
-            text_color='#A3C2E3',
-            font=ctk.CTkFont(size=14),
-            command=self._show_about,
-        ).pack(side='right', padx=12)
+        ).pack(side='left', padx=(4, 16), pady=12)
 
         body = ctk.CTkFrame(self, fg_color='transparent')
-        body.pack(fill='both', expand=True, padx=12, pady=10)
+        body.pack(fill='both', expand=True, padx=14, pady=8)
 
-        left = ctk.CTkFrame(body, fg_color='transparent', width=320)
-        left.pack(side='left', fill='y', padx=(0, 8))
+        left = ctk.CTkFrame(body, fg_color='transparent', width=300)
+        left.pack(side='left', fill='y', padx=(0, 10))
         left.pack_propagate(False)
 
         right = ctk.CTkFrame(body, fg_color='transparent')
@@ -102,15 +97,15 @@ class MainWindow(ctk.CTk):
         self._build_right(right)
 
     def _build_left(self, parent):
-        folder_card = SectionCard(parent, 'Folder Automation')
-        folder_card.pack(fill='x', pady=(0, 8))
+        folder_card = SectionCard(parent, 'Folder Automation', icon='📁')
+        folder_card.pack(fill='x', pady=(0, 6))
 
         self._folder_label = ctk.CTkLabel(
             folder_card.content,
             text='Belum dipilih',
-            font=ctk.CTkFont(size=11),
+            font=FONT_CAPTION(),
             text_color=C_TEXT_MUTED,
-            wraplength=260, justify='left', anchor='w',
+            wraplength=250, justify='left', anchor='w',
         )
         self._folder_label.pack(fill='x', pady=(0, 6))
 
@@ -118,29 +113,30 @@ class MainWindow(ctk.CTk):
             folder_card.content,
             text='Browse Folder…',
             command=self._browse_folder,
-            fg_color=C_BLUE_MED, hover_color=C_BLUE_DARK,
-            font=ctk.CTkFont(size=12), height=32,
+            fg_color=C_BLUE_MED, hover_color='#2563EB',
+            font=FONT_BTN(),
+            height=34, corner_radius=8,
         ).pack(fill='x')
 
-        cluster_card = SectionCard(parent, 'Cluster Terdeteksi')
-        cluster_card.pack(fill='x', pady=(0, 8))
+        cluster_card = SectionCard(parent, 'Folder Data Terdeteksi', icon='📂')
+        cluster_card.pack(fill='x', pady=(0, 6))
         self._cluster_frame = cluster_card.content
 
         ctk.CTkLabel(
             self._cluster_frame,
             text='Pilih folder terlebih dahulu',
-            font=ctk.CTkFont(size=11),
+            font=FONT_CAPTION(),
             text_color=C_TEXT_MUTED,
-        ).pack(pady=4)
+        ).pack(pady=2)
 
-        output_card = SectionCard(parent, 'File Output')
-        output_card.pack(fill='x', pady=(0, 8))
+        output_card = SectionCard(parent, 'File Output', icon='📄')
+        output_card.pack(fill='x', pady=(0, 6))
         self._output_label = ctk.CTkLabel(
             output_card.content,
             text='—',
-            font=ctk.CTkFont(size=11),
+            font=FONT_CAPTION(),
             text_color=C_TEXT_MUTED,
-            wraplength=260, justify='left', anchor='w',
+            wraplength=250, justify='left', anchor='w',
         )
         self._output_label.pack(fill='x')
 
@@ -148,36 +144,37 @@ class MainWindow(ctk.CTk):
         self._status_label = ctk.CTkLabel(
             parent,
             textvariable=self._status_var,
-            font=ctk.CTkFont(size=11, weight='bold'),
+            font=FONT_BODY_BOLD(),
             text_color=C_TEXT_MUTED,
         )
-        self._status_label.pack(anchor='w', pady=(4, 2))
+        self._status_label.pack(anchor='w', pady=(4, 1))
 
         self._progress = ctk.CTkProgressBar(
             parent, mode='determinate',
             fg_color=C_BLUE_LIGHT, progress_color=C_BLUE_MED,
+            height=5, corner_radius=3,
         )
         self._progress.set(0)
-        self._progress.pack(fill='x', pady=(0, 10))
+        self._progress.pack(fill='x', pady=(0, 8))
 
         self._gen_btn = ctk.CTkButton(
             parent,
-            text='Generate Summary',
+            text='▶  Generate Summary',
             command=self._start_engine,
-            fg_color=C_BLUE_DARK, hover_color=C_BLUE_MED,
-            font=ctk.CTkFont(family='Helvetica', size=14, weight='bold'),
-            height=44, state='disabled',
+            fg_color=C_BLUE_MED, hover_color=C_BLUE_DARK,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight='bold'),
+            height=42, state='disabled', corner_radius=10,
         )
-        self._gen_btn.pack(fill='x')
+        self._gen_btn.pack(fill='x', pady=(2, 6))
 
     def _build_right(self, parent):
-        log_card = SectionCard(parent, 'Log Proses')
+        log_card = SectionCard(parent, 'Log Proses', icon='📋')
         log_card.pack(fill='both', expand=True)
         self._log_box = ctk.CTkTextbox(
             log_card.content,
-            font=ctk.CTkFont(family='Courier', size=11),
-            fg_color='#0D1117', text_color='#C9D1D9',
-            corner_radius=4, wrap='word', state='disabled',
+            font=FONT_LOG(),
+            fg_color=C_TERMINAL_BG, text_color=C_TERMINAL_FG,
+            corner_radius=8, wrap='word', state='disabled',
         )
         self._log_box.pack(fill='both', expand=True)
 
@@ -209,8 +206,8 @@ class MainWindow(ctk.CTk):
         if not self._clusters:
             ctk.CTkLabel(
                 self._cluster_frame,
-                text='Tidak ada cluster CSV ditemukan',
-                font=ctk.CTkFont(size=11), text_color=C_RED,
+                text='Tidak ada data CSV ditemukan',
+                font=FONT_CAPTION(), text_color=C_RED,
             ).pack(pady=4)
             return
         for name in self._clusters:
@@ -233,7 +230,7 @@ class MainWindow(ctk.CTk):
         self._running = True
         self._cluster_results = {}
         self._start_time = time.time()
-        self._gen_btn.configure(state='disabled', text='Sedang Berjalan…')
+        self._gen_btn.configure(state='disabled', text='⏳  Sedang Berjalan…')
         self._progress.set(0)
         self._set_status('Memulai…', C_BLUE_MED)
         self._log_append('[INFO] Memulai proses generate…\n')
@@ -257,7 +254,7 @@ class MainWindow(ctk.CTk):
             total = len(dirs_to_process)
 
             for i, (cluster_dir, cluster_name) in enumerate(dirs_to_process):
-                self._q_log(f'[INFO] Memproses cluster: {cluster_name}')
+                self._q_log(f'[INFO] Memproses data: {cluster_name}')
                 logger.info(f'Cluster {cluster_name} — mulai')
                 base_prog = i / total
                 step = 1 / total
@@ -374,7 +371,7 @@ class MainWindow(ctk.CTk):
 
     def _on_engine_done(self, success: bool):
         self._running = False
-        self._gen_btn.configure(state='normal', text='Generate Summary')
+        self._gen_btn.configure(state='normal', text='▶  Generate Summary')
         elapsed = time.time() - self._start_time
         if success:
             self._set_status('Selesai', C_GREEN)
@@ -392,75 +389,78 @@ class MainWindow(ctk.CTk):
 
     def _show_done_dialog(self, elapsed: float):
         dialog = ctk.CTkToplevel(self)
-        dialog.title('Generate Complete')
+        dialog.title('Proses Selesai')
         dialog.resizable(False, False)
         dialog.grab_set()
         dialog.configure(fg_color=C_WHITE)
 
+        # Set dialog icon
+        ico_path = BASE_DIR / 'assets' / 'app.ico'
+        if ico_path.exists():
+            dialog.after(200, lambda: dialog.iconbitmap(str(ico_path)))
+
         n_rows = max(1, len(self._cluster_results))
-        h = 180 + n_rows * 32
-        w = 400
+        h = 140 + n_rows * 28
+        w = 380
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         dialog.geometry(f'{w}x{h}+{(sw - w) // 2}+{(sh - h) // 2}')
 
         ctk.CTkLabel(
             dialog,
-            text='Generation Complete',
-            font=ctk.CTkFont(family='Helvetica', size=16, weight='bold'),
-            text_color=C_BLUE_DARK,
-        ).pack(pady=(18, 10))
+            text='Proses Selesai',
+            font=ctk.CTkFont(family=FONT_FAMILY, size=16, weight='bold'),
+            text_color=C_TEXT_DARK,
+        ).pack(pady=(12, 8))
 
         # Per-cluster result grid
         grid = ctk.CTkFrame(dialog, fg_color='transparent')
-        grid.pack(fill='x', padx=24)
+        grid.pack(fill='x', padx=20)
 
         for cluster, (ok, msg) in self._cluster_results.items():
             row = ctk.CTkFrame(grid, fg_color='transparent')
-            row.pack(fill='x', pady=3)
+            row.pack(fill='x', pady=2)
             ctk.CTkLabel(
-                row,
-                text=cluster,
-                font=ctk.CTkFont(size=12, weight='bold'),
-                text_color=C_TEXT_DARK,
-                anchor='w', width=200,
+                row, text=cluster,
+                font=FONT_BODY_BOLD(), text_color=C_TEXT_DARK,
+                anchor='w', width=180,
             ).pack(side='left')
             if ok:
-                ctk.CTkLabel(row, text='✓ Success', font=ctk.CTkFont(size=12),
-                             text_color=C_GREEN).pack(side='right')
+                ctk.CTkLabel(row, text='✓ Berhasil',
+                             font=FONT_BODY(), text_color=C_GREEN).pack(side='right')
             else:
-                ctk.CTkLabel(row, text='✗ Failed', font=ctk.CTkFont(size=12),
-                             text_color=C_RED).pack(side='right')
+                ctk.CTkLabel(row, text='✗ Gagal',
+                             font=FONT_BODY(), text_color=C_RED).pack(side='right')
 
         # Divider
-        ctk.CTkFrame(dialog, fg_color='#D0D0D0', height=1).pack(fill='x', padx=24, pady=10)
+        ctk.CTkFrame(dialog, fg_color=C_BLUE_LIGHT, height=1).pack(fill='x', padx=20, pady=6)
 
         # Elapsed time
         time_row = ctk.CTkFrame(dialog, fg_color='transparent')
-        time_row.pack(fill='x', padx=24, pady=(0, 14))
-        ctk.CTkLabel(time_row, text='Elapsed Time',
-                     font=ctk.CTkFont(size=12), text_color=C_TEXT_MUTED).pack(side='left')
+        time_row.pack(fill='x', padx=20, pady=(0, 8))
+        ctk.CTkLabel(time_row, text='Waktu Proses',
+                     font=FONT_BODY(), text_color=C_TEXT_MUTED).pack(side='left')
         ctk.CTkLabel(time_row, text=fmt_elapsed(elapsed),
-                     font=ctk.CTkFont(size=12, weight='bold'), text_color=C_TEXT_DARK).pack(side='right')
+                     font=FONT_BODY_BOLD(), text_color=C_TEXT_DARK).pack(side='right')
 
         # Buttons
         btn_row = ctk.CTkFrame(dialog, fg_color='transparent')
-        btn_row.pack(pady=(0, 16))
+        btn_row.pack(pady=(0, 10))
 
         ctk.CTkButton(
             btn_row,
             text='Buka Folder Output',
             command=lambda: (self._open_output_folder(), dialog.destroy()),
             fg_color=C_BLUE_MED, hover_color=C_BLUE_DARK,
-            width=160, height=36,
-        ).pack(side='left', padx=6)
+            font=FONT_BTN(), width=160, height=34, corner_radius=8,
+        ).pack(side='left', padx=4)
 
         ctk.CTkButton(
             btn_row,
             text='Tutup',
             command=dialog.destroy,
-            fg_color='#E0E0E0', text_color=C_TEXT_DARK, hover_color='#C8C8C8',
-            width=80, height=36,
-        ).pack(side='left', padx=6)
+            fg_color=C_BLUE_LIGHT, text_color=C_TEXT_DARK, hover_color='#CBD5E1',
+            font=FONT_BTN(), width=80, height=34, corner_radius=8,
+        ).pack(side='left', padx=4)
 
     # ------------------------------------------------------------------
     # Utilities
@@ -480,35 +480,4 @@ class MainWindow(ctk.CTk):
             self._cfg['window_width'] = self.winfo_width()
             self._cfg['window_height'] = self.winfo_height()
 
-    def _show_about(self):
-        dialog = ctk.CTkToplevel(self)
-        dialog.title('About')
-        dialog.geometry('300x220')
-        dialog.resizable(False, False)
-        dialog.grab_set()
-        dialog.configure(fg_color=C_WHITE)
-        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-        dialog.geometry(f'300x220+{(sw - 300) // 2}+{(sh - 220) // 2}')
-
-        ctk.CTkLabel(dialog, text='Gelatik Automation',
-                     font=ctk.CTkFont(size=16, weight='bold'),
-                     text_color=C_BLUE_DARK).pack(pady=(24, 4))
-        ctk.CTkLabel(dialog, text=f'v{get_version()}',
-                     font=ctk.CTkFont(size=12),
-                     text_color=C_TEXT_MUTED).pack()
-        ctk.CTkLabel(dialog, text='SOS Dashboard Generator',
-                     font=ctk.CTkFont(size=12),
-                     text_color=C_TEXT_DARK).pack(pady=(8, 4))
-        ctk.CTkLabel(dialog, text='© 2025 Gelatik',
-                     font=ctk.CTkFont(size=11),
-                     text_color=C_TEXT_MUTED).pack()
-
-        log_path = BASE_DIR / 'logs' / 'automation.log'
-        ctk.CTkLabel(dialog, text=f'Log: {log_path}',
-                     font=ctk.CTkFont(size=9),
-                     text_color=C_TEXT_MUTED,
-                     wraplength=270).pack(pady=(12, 0))
-
-        ctk.CTkButton(dialog, text='Tutup', command=dialog.destroy,
-                      fg_color=C_BLUE_MED, hover_color=C_BLUE_DARK,
-                      width=80, height=32).pack(pady=16)
+    # _show_about removed per user request

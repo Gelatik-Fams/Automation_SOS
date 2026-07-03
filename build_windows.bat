@@ -20,7 +20,7 @@ if exist dist rmdir /s /q dist
 if exist build rmdir /s /q build
 
 :: Build executable
-pyinstaller Automation.spec --clean
+python -m PyInstaller Automation.spec --clean
 
 echo.
 if exist dist\Automation\Automation.exe (
