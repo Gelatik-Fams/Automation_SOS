@@ -518,6 +518,263 @@ class ExcelExportTests(unittest.TestCase):
         self.assertTrue(all(chart.series and chart.series[0].cat is not None for chart in category_charts))
         self.assertTrue(all(chart.series[0].cat.strRef is not None for chart in category_charts))
 
+    def test_excel_category_charts_adaptive_width_and_position(self):
+        df = pd.concat([
+            self.make_df(),
+            dataframe_with_produsen([
+                # CUP NOODLE - Jan 25 (2 brands)
+                {
+                    "Source Division": "Noodle",
+                    "Region": "WEST",
+                    "Channel": "MT",
+                    "Account": "ALPHA",
+                    "Category Channel": "CUP NOODLE",
+                    "Brand": "POP MIE",
+                    "Period": "Jan 25",
+                    "Store Code": "S003",
+                    "Product Code": "SKU003",
+                    "Facing": 12,
+                },
+                {
+                    "Source Division": "Noodle",
+                    "Region": "WEST",
+                    "Channel": "MT",
+                    "Account": "ALPHA",
+                    "Category Channel": "CUP NOODLE",
+                    "Brand": "COMP1",
+                    "Period": "Jan 25",
+                    "Store Code": "S003",
+                    "Product Code": "COMPETITOR SKU 1",
+                    "Facing": 8,
+                },
+                # CUP NOODLE - Feb 25 (same 2 brands)
+                {
+                    "Source Division": "Noodle",
+                    "Region": "WEST",
+                    "Channel": "MT",
+                    "Account": "ALPHA",
+                    "Category Channel": "CUP NOODLE",
+                    "Brand": "POP MIE",
+                    "Period": "Feb 25",
+                    "Store Code": "S003",
+                    "Product Code": "SKU003",
+                    "Facing": 15,
+                },
+                {
+                    "Source Division": "Noodle",
+                    "Region": "WEST",
+                    "Channel": "MT",
+                    "Account": "ALPHA",
+                    "Category Channel": "CUP NOODLE",
+                    "Brand": "COMP1",
+                    "Period": "Feb 25",
+                    "Store Code": "S003",
+                    "Product Code": "COMPETITOR SKU 1",
+                    "Facing": 5,
+                },
+                # BAG NOODLE - Jan 25 (6 brands)
+                {
+                    "Source Division": "Noodle",
+                    "Region": "WEST",
+                    "Channel": "MT",
+                    "Account": "ALPHA",
+                    "Category Channel": "BAG NOODLE",
+                    "Brand": "INDOMIE",
+                    "Period": "Jan 25",
+                    "Store Code": "S003",
+                    "Product Code": "SKU001",
+                    "Facing": 12,
+                },
+                {
+                    "Source Division": "Noodle",
+                    "Region": "WEST",
+                    "Channel": "MT",
+                    "Account": "ALPHA",
+                    "Category Channel": "BAG NOODLE",
+                    "Brand": "COMP1",
+                    "Period": "Jan 25",
+                    "Store Code": "S003",
+                    "Product Code": "COMPETITOR SKU 1",
+                    "Facing": 8,
+                },
+                {
+                    "Source Division": "Noodle",
+                    "Region": "WEST",
+                    "Channel": "MT",
+                    "Account": "ALPHA",
+                    "Category Channel": "BAG NOODLE",
+                    "Brand": "COMP2",
+                    "Period": "Jan 25",
+                    "Store Code": "S003",
+                    "Product Code": "COMPETITOR SKU 2",
+                    "Facing": 5,
+                },
+                {
+                    "Source Division": "Noodle",
+                    "Region": "WEST",
+                    "Channel": "MT",
+                    "Account": "ALPHA",
+                    "Category Channel": "BAG NOODLE",
+                    "Brand": "COMP3",
+                    "Period": "Jan 25",
+                    "Store Code": "S003",
+                    "Product Code": "COMPETITOR SKU 3",
+                    "Facing": 5,
+                },
+                {
+                    "Source Division": "Noodle",
+                    "Region": "WEST",
+                    "Channel": "MT",
+                    "Account": "ALPHA",
+                    "Category Channel": "BAG NOODLE",
+                    "Brand": "COMP4",
+                    "Period": "Jan 25",
+                    "Store Code": "S003",
+                    "Product Code": "COMPETITOR SKU 4",
+                    "Facing": 5,
+                },
+                {
+                    "Source Division": "Noodle",
+                    "Region": "WEST",
+                    "Channel": "MT",
+                    "Account": "ALPHA",
+                    "Category Channel": "BAG NOODLE",
+                    "Brand": "COMP5",
+                    "Period": "Jan 25",
+                    "Store Code": "S003",
+                    "Product Code": "COMPETITOR SKU 5",
+                    "Facing": 5,
+                },
+                # BAG NOODLE - Feb 25 (same 6 brands)
+                {
+                    "Source Division": "Noodle",
+                    "Region": "WEST",
+                    "Channel": "MT",
+                    "Account": "ALPHA",
+                    "Category Channel": "BAG NOODLE",
+                    "Brand": "INDOMIE",
+                    "Period": "Feb 25",
+                    "Store Code": "S003",
+                    "Product Code": "SKU001",
+                    "Facing": 12,
+                },
+                {
+                    "Source Division": "Noodle",
+                    "Region": "WEST",
+                    "Channel": "MT",
+                    "Account": "ALPHA",
+                    "Category Channel": "BAG NOODLE",
+                    "Brand": "COMP1",
+                    "Period": "Feb 25",
+                    "Store Code": "S003",
+                    "Product Code": "COMPETITOR SKU 1",
+                    "Facing": 8,
+                },
+                {
+                    "Source Division": "Noodle",
+                    "Region": "WEST",
+                    "Channel": "MT",
+                    "Account": "ALPHA",
+                    "Category Channel": "BAG NOODLE",
+                    "Brand": "COMP2",
+                    "Period": "Feb 25",
+                    "Store Code": "S003",
+                    "Product Code": "COMPETITOR SKU 2",
+                    "Facing": 5,
+                },
+                {
+                    "Source Division": "Noodle",
+                    "Region": "WEST",
+                    "Channel": "MT",
+                    "Account": "ALPHA",
+                    "Category Channel": "BAG NOODLE",
+                    "Brand": "COMP3",
+                    "Period": "Feb 25",
+                    "Store Code": "S003",
+                    "Product Code": "COMPETITOR SKU 3",
+                    "Facing": 5,
+                },
+                {
+                    "Source Division": "Noodle",
+                    "Region": "WEST",
+                    "Channel": "MT",
+                    "Account": "ALPHA",
+                    "Category Channel": "BAG NOODLE",
+                    "Brand": "COMP4",
+                    "Period": "Feb 25",
+                    "Store Code": "S003",
+                    "Product Code": "COMPETITOR SKU 4",
+                    "Facing": 5,
+                },
+                {
+                    "Source Division": "Noodle",
+                    "Region": "WEST",
+                    "Channel": "MT",
+                    "Account": "ALPHA",
+                    "Category Channel": "BAG NOODLE",
+                    "Brand": "COMP5",
+                    "Period": "Feb 25",
+                    "Store Code": "S003",
+                    "Product Code": "COMPETITOR SKU 5",
+                    "Facing": 5,
+                },
+            ]),
+        ], ignore_index=True)
+
+        saved_wb = None
+        orig_save = Workbook.save
+        def mock_save(self, filename):
+            nonlocal saved_wb
+            saved_wb = self
+            orig_save(self, filename)
+
+        from unittest.mock import patch
+        with patch('openpyxl.Workbook.save', mock_save):
+            with tempfile.TemporaryDirectory() as tmp:
+                tes.export_summary_excel(
+                    df,
+                    {("REGION", "WEST"): 70},
+                    output_dir=tmp,
+                    cluster_name="Indulgence",
+                )
+        
+        ws = saved_wb["Noodle"]
+
+        # Filter category charts
+        category_charts = [chart for chart in ws._charts if " - " in str(chart.title)]
+        
+        import re
+        from openpyxl.utils import column_index_from_string
+        def get_chart_col_idx(c):
+            col_letter = re.match(r"^([A-Z]+)", c.anchor).group(1)
+            return column_index_from_string(col_letter)
+
+        # Verify charts are scaled adaptively
+        cup_noodle_charts = sorted([c for c in category_charts if "CUP NOODLE" in str(c.title)], key=get_chart_col_idx)
+        bag_noodle_charts = sorted([c for c in category_charts if "BAG NOODLE" in str(c.title)], key=get_chart_col_idx)
+        
+        self.assertEqual(len(cup_noodle_charts), 2)
+        self.assertEqual(len(bag_noodle_charts), 2)
+        
+        # Both categories should have uniform dimensions based on the max brand count in the division (7 brands)
+        # 8.0 + 7 * 2.0 = 22.0 cm width
+        self.assertAlmostEqual(cup_noodle_charts[0].width, 22.0)
+        self.assertAlmostEqual(bag_noodle_charts[0].width, 22.0)
+        
+        # Spacing test: anchor column is uniform for all categories on the sheet
+        # Max brands = 7 -> width = 22 -> chart_width_cols = int(22 / 2.7) + 1 = 9
+        # Since base_col is 4 (D), first period chart (Jan 25) starts at:
+        # Cup noodle: D (4)
+        # Bag noodle: D (4)
+        # Second period chart (Feb 25) anchor column is at col index: 4 - 1 + 9 = 12 (column M / 0-indexed 12)
+        # This keeps the months vertically aligned across all categories!
+        
+        self.assertTrue(cup_noodle_charts[0].anchor.startswith('D'))
+        self.assertTrue(cup_noodle_charts[1].anchor.startswith('M'))
+        
+        self.assertTrue(bag_noodle_charts[0].anchor.startswith('D'))
+        self.assertTrue(bag_noodle_charts[1].anchor.startswith('M'))
+
     def test_export_summary_excel_has_no_vba_dependency_or_macro_output(self):
         with open("tes.py", encoding="utf-8") as f:
             source = f.read()

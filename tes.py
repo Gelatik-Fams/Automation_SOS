@@ -1,4 +1,4 @@
-﻿import pandas as pd
+import pandas as pd
 import time
 import os
 import glob
@@ -1936,7 +1936,8 @@ def _format_excel_dashboard(ws, payload):
         for row_number in range(start_row, end_row + 1):
             ws.row_dimensions[row_number].hidden = True
 
-    for col in range(1, ws.max_column + 1):
+    max_col_to_format = max(ws.max_column, 150)
+    for col in range(1, max_col_to_format + 1):
         ws.column_dimensions[col_letter(col - 1)].width = 15
     ws.column_dimensions['A'].width = 22
     ws.column_dimensions['B'].width = 24
@@ -1997,8 +1998,25 @@ def _add_category_by_divisi_charts(ws, fmt_section, anchor_row):
     if not cat_ranges or not periods or not sos_cols:
         return
 
-    chart_width_cols = 8
     base_col = 4
+
+    # Hitung jumlah item data (brands) maksimum di seluruh kategori untuk lembar ini
+    max_num_items = 0
+    for category_range in cat_ranges:
+        start_row = fmt_section['data_start'] + category_range['start'] - 2
+        end_row = fmt_section['data_start'] + category_range['end'] - 3
+        if end_row >= start_row:
+            num_items = end_row - start_row + 1
+            if num_items > max_num_items:
+                max_num_items = num_items
+
+    if max_num_items < 1:
+        max_num_items = 1
+
+    # Gunakan lebar dan jarak kolom yang seragam untuk semua kategori di sheet ini agar rapi sejajar secara vertikal
+    chart_width = 8.0 + (max_num_items * 2.0)
+    chart_height = 12.0
+    chart_width_cols = int(chart_width / 2.7) + 1
 
     for category_index, category_range in enumerate(cat_ranges):
         category_name = category_range['cat']
@@ -2019,8 +2037,8 @@ def _add_category_by_divisi_charts(ws, fmt_section, anchor_row):
             chart.x_axis.delete = False
             chart.x_axis.tickLblPos = 'low'
             chart.legend = None
-            chart.width = 20
-            chart.height = 12
+            chart.width = chart_width
+            chart.height = chart_height
 
             chart.dLbls = DataLabelList()
             chart.dLbls.showVal = True
