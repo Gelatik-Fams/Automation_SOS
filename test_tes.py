@@ -126,6 +126,23 @@ class FileDiscoveryTests(unittest.TestCase):
             tes.UNKNOWN_SOURCE_DIVISION: 1,
         })
 
+    def test_baca_semua_csv_keeps_physical_line_count_for_user_log(self):
+        original_cwd = os.getcwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                os.chdir(tmp)
+                with open("Report Product - Jan 25 - Pasta.csv", "w", encoding="utf-8", newline="") as f:
+                    f.write("Visit Date,Product Code,Produsen,Facing\n")
+                    f.write('"2025-01-02","SKU\n001","INDOFOOD",10\n')
+                    f.write('"2025-01-02","COMPETITOR SKU","COMPETITOR",5\n')
+
+                df = tes.baca_semua_csv()
+
+                self.assertEqual(df.attrs["physical_csv_lines"], 4)
+                self.assertEqual(len(df), 2)
+            finally:
+                os.chdir(original_cwd)
+
 
 class AppsScriptRemovalTests(unittest.TestCase):
     def test_apps_script_file_is_not_required_for_excel_output(self):
