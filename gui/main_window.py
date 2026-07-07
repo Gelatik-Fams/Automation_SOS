@@ -271,13 +271,18 @@ class MainWindow(ctk.CTk):
                     df_raw = tes.baca_semua_csv()
                     if df_raw is None or df_raw.empty:
                         raise ValueError(f'Tidak ada data CSV di {cluster_name}')
-                    csv_count = len(df_raw)
-                    self._q_log(f'[INFO] {csv_count:,} baris CSV')
-                    logger.info(f'Cluster {cluster_name} — {csv_count:,} baris CSV')
+                    csv_count = df_raw.attrs.get('physical_csv_lines', len(df_raw))
+                    self._q_log(f'[INFO] {csv_count:,} baris fisik CSV terdeteksi')
+                    logger.info(f'Cluster {cluster_name} — {csv_count:,} baris fisik CSV terdeteksi')
                     self._q_progress(base_prog + step * 0.30)
 
                     df, removed = tes.validasi_data(df_raw)
-                    self._q_log(f'[INFO] Valid: {len(df):,} baris ({len(removed)} duplikat dihapus)')
+                    if len(removed):
+                        self._q_log(f'[INFO] {len(removed):,} duplikat dihapus')
+                        logger.info(f'Cluster {cluster_name} — {len(removed):,} duplikat dihapus')
+                    else:
+                        self._q_log('[INFO] Tidak ada duplikat')
+                        logger.info(f'Cluster {cluster_name} — tidak ada duplikat')
                     self._q_progress(base_prog + step * 0.50)
 
                     target_rows = tes._enrich_targets_with_df_values(df, target_rows)
