@@ -81,6 +81,12 @@ def count_files_by_source_division(files):
     return dict(sorted(counts.items()))
 
 
+def count_physical_text_lines(path):
+    """Hitung baris fisik text untuk kebutuhan log user-facing."""
+    with open(path, 'rb') as f:
+        return sum(1 for _ in f)
+
+
 def get_dashboard_division_options(df):
     if 'Source Division' not in df.columns:
         return ['ALL']
@@ -2541,8 +2547,10 @@ def baca_semua_csv():
     for division, count in count_files_by_source_division(files).items():
         print(f'{division:<12} {count} files')
     dfs = []
+    total_physical_lines = 0
     for f in files:
         print(f'-> {display_csv_path(f, base_dir)}')
+        total_physical_lines += count_physical_text_lines(f)
         try:
             df_temp = pd.read_csv(f, low_memory=False)
         except pd.errors.ParserError:
@@ -2600,7 +2608,8 @@ def baca_semua_csv():
     if 'Account' not in combined.columns:
         combined['Account'] = combined.get('Subchannel', 'UNKNOWN')
 
-    print(f'[INFO] Total baris: {len(combined):,}')
+    combined.attrs['physical_csv_lines'] = total_physical_lines
+    print(f'[INFO] {total_physical_lines:,} baris fisik CSV terdeteksi.')
     summary = combined.groupby('Period').size().reset_index(name='rows')
     summary = summary.sort_values('Period', key=lambda s: s.map(sort_key_period))
     print(summary.to_string(index=False))
