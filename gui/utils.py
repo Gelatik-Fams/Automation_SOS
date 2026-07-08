@@ -22,10 +22,18 @@ def validate_workbook(path: str) -> str | None:
         wb = _lw(path, read_only=True)
         sheets = wb.sheetnames
         wb.close()
-        if 'TARGETS' not in sheets:
+        
+        is_store_detail = "Store Detail" in os.path.basename(path)
+        
+        if not is_store_detail and 'TARGETS' not in sheets:
             return 'Sheet TARGETS tidak ada'
-        if len(sheets) < 2:
+            
+        if not is_store_detail and len(sheets) < 2:
             return 'Workbook tidak lengkap (tidak ada sheet divisi)'
+            
+        if is_store_detail and len(sheets) < 1:
+            return 'Workbook tidak lengkap (tidak ada sheet data)'
+            
         return None
     except Exception as e:
         return f'Workbook tidak dapat dibuka: {e}'

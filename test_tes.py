@@ -458,7 +458,7 @@ class ExcelExportTests(unittest.TestCase):
                 for row_number in range(1, ws.max_row + 1)
             ]
 
-        self.assertEqual(rows, target_rows)
+        self.assertEqual(rows[:len(target_rows)], target_rows)
 
     def test_export_summary_excel_applies_targets_by_division_dimension_and_name(self):
         target_rows = [
@@ -823,6 +823,79 @@ class ExcelExportTests(unittest.TestCase):
                 os.chdir(original_cwd)
 
 
+class StoreDetailExportTests(unittest.TestCase):
+    def make_df(self):
+        return dataframe_with_produsen([
+            {
+                "Source Division": "Noodle",
+                "Region": "WEST",
+                "Area": "BANDUNG",
+                "Channel": "GT",
+                "Account": "RETAIL",
+                "Store Code": "1001",
+                "Store Name": "TOKO A",
+                "Period": "Jan 25",
+                "Product Code": "SKU_INDOFOOD",
+                "Facing": 10,
+            },
+            {
+                "Source Division": "Noodle",
+                "Region": "WEST",
+                "Area": "BANDUNG",
+                "Channel": "GT",
+                "Account": "RETAIL",
+                "Store Code": "1001",
+                "Store Name": "TOKO A",
+                "Period": "Jan 25",
+                "Product Code": "SKU_COMPETITOR",
+                "Facing": 30,
+            },
+            {
+                "Source Division": "Noodle",
+                "Region": "WEST",
+                "Area": "BANDUNG",
+                "Channel": "GT",
+                "Account": "RETAIL",
+                "Store Code": "1001",
+                "Store Name": "TOKO A",
+                "Period": "Feb 25",
+                "Product Code": "SKU_INDOFOOD",
+                "Facing": 20,
+            },
+        ])
+
+    def test_export_store_detail_creates_correct_structure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            df = self.make_df()
+            output_path = tes.export_store_detail_excel(df, output_dir=tmp, cluster_name="TestCluster")
+            
+            self.assertTrue(os.path.exists(output_path))
+            self.assertTrue(output_path.endswith("Store Detail_TestCluster.xlsx"))
+            
+            wb = load_workbook(output_path)
+            self.assertIn("Noodle", wb.sheetnames)
+            ws = wb["Noodle"]
+            
+            rows = list(ws.iter_rows(values_only=True))
+            
+            # Header 1
+            self.assertEqual(
+                list(rows[0]),
+                ['REGION', 'AREA', 'CHANNEL', 'ACCOUNT', 'STORE CODE', 'STORE NAME', 'Jan 25', 'Feb 25']
+            )
+            # Header 2
+            self.assertEqual(
+                list(rows[1]),
+                [None, None, None, None, None, None, 'SOS%', 'SOS%']
+            )
+            # Data row
+            # Jan 25: 10 Indofood, 30 Competitor = 25.0% SOS
+            # Feb 25: 20 Indofood, 0 Competitor = 100.0% SOS
+            self.assertEqual(
+                list(rows[2]),
+                ['WEST', 'BANDUNG', 'GT', 'RETAIL', '1001', 'TOKO A', 0.25, 1.0]
+            )
+
 class StoreDetailTests(unittest.TestCase):
     def test_period_is_pivot_axis_not_left_identity_column(self):
         df = dataframe_with_produsen([
@@ -1127,6 +1200,161 @@ class DashboardDivisionAwareTests(unittest.TestCase):
             for r in chart_requests
         ]
         self.assertTrue(all(row_index >= len(ws.updated_values) for row_index in row_indexes))
+
+    def test_single_division_skips_division_subtotal_row(self):
+        """When data has only 1 division, [Divisi] TOTAL row should NOT appear."""
+        df = dataframe_with_produsen([
+            {
+                "Source Division": "Noodle",
+                "Region": "WEST",
+                "Period": "Jan 25",
+                "Product Code": "SKU001",
+                "Facing": 30,
+            },
+            {
+                "Source Division": "Noodle",
+                "Region": "WEST",
+                "Period": "Jan 25",
+                "Product Code": "COMPETITOR SKU",
+                "Facing": 10,
+            },
+        ])
+
+        rows, meta = tes.buat_tabel_sos_monthly(
+            df,
+            ["Source Division", "Region"],
+            "REGION",
+            ["Jan 25"],
+            {("REGION", "WEST"): 70},
+        )
+
+        first_cells = [row[0] for row in rows]
+        self.assertNotIn("Noodle TOTAL", first_cells)
+        self.assertIn("GRAND TOTAL", first_cells)
+
+    def test_multi_division_keeps_division_subtotal_rows(self):
+        """When data has >1 divisions, [Divisi] TOTAL rows should still appear."""
+        df = dataframe_with_produsen([
+            {
+                "Source Division": "Noodle",
+                "Region": "WEST",
+                "Period": "Jan 25",
+                "Product Code": "SKU001",
+                "Facing": 30,
+            },
+            {
+                "Source Division": "Noodle",
+                "Region": "WEST",
+                "Period": "Jan 25",
+                "Product Code": "COMPETITOR SKU",
+                "Facing": 10,
+            },
+            {
+                "Source Division": "Snack",
+                "Region": "WEST",
+                "Period": "Jan 25",
+                "Product Code": "SKU002",
+                "Facing": 10,
+            },
+            {
+                "Source Division": "Snack",
+                "Region": "WEST",
+                "Period": "Jan 25",
+                "Product Code": "COMPETITOR SKU",
+                "Facing": 30,
+            },
+        ])
+
+        rows, meta = tes.buat_tabel_sos_monthly(
+            df,
+            ["Source Division", "Region"],
+            "REGION",
+            ["Jan 25"],
+            {("REGION", "WEST"): 70},
+        )
+
+        first_cells = [row[0] for row in rows]
+        self.assertIn("Noodle TOTAL", first_cells)
+        self.assertIn("Snack TOTAL", first_cells)
+        self.assertIn("GRAND TOTAL", first_cells)
+
+    def test_excel_export_no_division_total_row(self):
+        """Per-division Excel sheets should not contain [Divisi] TOTAL rows."""
+        df = self.make_dashboard_df()
+        with tempfile.TemporaryDirectory() as tmp:
+            output_path = tes.export_summary_excel(
+                df,
+                {("REGION", "WEST"): 70},
+                output_dir=tmp,
+                cluster_name="TestCluster",
+            )
+            wb = load_workbook(output_path)
+
+        for sheet_name in [s for s in wb.sheetnames if s != "TARGETS"]:
+            ws = wb[sheet_name]
+            first_col_values = [
+                ws.cell(row=r, column=1).value
+                for r in range(1, ws.max_row + 1)
+                if ws.cell(row=r, column=1).value
+            ]
+            division_total_rows = [
+                v for v in first_col_values
+                if str(v).endswith(" TOTAL") and v != "GRAND TOTAL"
+            ]
+            self.assertEqual(
+                division_total_rows, [],
+                f"Sheet '{sheet_name}' should not have [Divisi] TOTAL rows, found: {division_total_rows}"
+            )
+
+    def test_enrich_targets_adds_grand_total_per_dimension(self):
+        """_enrich_targets_with_df_values should add GRAND TOTAL for each division × dimension."""
+        df = self.make_dashboard_df()
+        header = ['Division', 'Dimension', 'Name', 'Target']
+        initial_rows = [header, ['Noodle', 'REGION', 'DEFAULT', 65.0]]
+
+        enriched = tes._enrich_targets_with_df_values(df, initial_rows)
+
+        enriched_names = [
+            (str(row[0]), str(row[1]), str(row[2]))
+            for row in enriched[1:]
+        ]
+        # GRAND TOTAL should exist for each division × each dimension
+        for division in ['Noodle', 'Snack']:
+            for dim in ['REGION', 'CHANNEL', 'ACCOUNT GELATIK', 'CATEGORY CHANNEL', 'CHANNEL-ACCOUNT']:
+                self.assertIn(
+                    (division, dim, 'GRAND TOTAL'),
+                    enriched_names,
+                    f"Missing GRAND TOTAL for {division} × {dim}"
+                )
+
+    def test_targets_sheet_contains_grand_total_entries(self):
+        """TARGETS sheet in Excel output should have GRAND TOTAL rows."""
+        df = self.make_dashboard_df()
+        with tempfile.TemporaryDirectory() as tmp:
+            output_path = tes.export_summary_excel(
+                df,
+                {("REGION", "WEST"): 70},
+                output_dir=tmp,
+                cluster_name="TestGT",
+            )
+            wb = load_workbook(output_path)
+            ws = wb["TARGETS"]
+
+        target_entries = []
+        for r in range(2, ws.max_row + 1):
+            div = ws.cell(row=r, column=1).value
+            dim = ws.cell(row=r, column=2).value
+            name = ws.cell(row=r, column=3).value
+            if div and dim and name:
+                target_entries.append((str(div), str(dim), str(name)))
+
+        for division in ['Noodle', 'Snack']:
+            for dim in ['REGION', 'CHANNEL', 'ACCOUNT GELATIK', 'CATEGORY CHANNEL']:
+                self.assertIn(
+                    (division, dim, 'GRAND TOTAL'),
+                    target_entries,
+                    f"TARGETS sheet missing GRAND TOTAL for {division} × {dim}"
+                )
 
 
 if __name__ == "__main__":

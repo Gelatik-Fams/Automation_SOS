@@ -217,7 +217,10 @@ class MainWindow(ctk.CTk):
         if not self._folder or not self._clusters:
             self._output_label.configure(text='—')
             return
-        files = [f'Summary SOS_{c}.xlsx' for c in self._clusters]
+        files = []
+        for c in self._clusters:
+            files.append(f'Summary SOS_{c}.xlsx')
+            files.append(f'Store Detail_{c}.xlsx')
         self._output_label.configure(text='\n'.join(files), text_color=C_TEXT_DARK)
 
     # ------------------------------------------------------------------
@@ -307,7 +310,24 @@ class MainWindow(ctk.CTk):
 
                     size_kb = os.path.getsize(output_path) / 1024
                     self._q_log(f'[OK] {os.path.basename(output_path)} ({size_kb:.0f} KB)')
-                    logger.info(f'Cluster {cluster_name} — berhasil: {output_path} ({size_kb:.0f} KB)')
+                    
+                    self._q_log(f'[INFO] Membuat Store Detail_{cluster_name}.xlsx…')
+                    output_detail_path = tes.export_store_detail_excel(
+                        df, output_dir='.', cluster_name=cluster_name
+                    )
+                    
+                    validation_err_detail = validate_workbook(output_detail_path)
+                    if validation_err_detail:
+                        try:
+                            os.remove(output_detail_path)
+                        except OSError:
+                            pass
+                        raise ValueError(f'Validasi gagal untuk Store Detail: {validation_err_detail}')
+                        
+                    size_kb_detail = os.path.getsize(output_detail_path) / 1024
+                    self._q_log(f'[OK] {os.path.basename(output_detail_path)} ({size_kb_detail:.0f} KB)')
+
+                    logger.info(f'Cluster {cluster_name} — berhasil: {output_path} ({size_kb:.0f} KB) & {output_detail_path} ({size_kb_detail:.0f} KB)')
                     ok = True
 
                 except Exception as exc:

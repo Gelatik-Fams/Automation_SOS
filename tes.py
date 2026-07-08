@@ -12,6 +12,7 @@ from openpyxl.chart.data_source import AxDataSource, StrRef
 from openpyxl.chart.label import DataLabelList
 from openpyxl.formatting.rule import FormulaRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 from openpyxl.utils.cell import quote_sheetname
 from watchdog.observers.polling import PollingObserver
 from watchdog.events import FileSystemEventHandler
@@ -517,6 +518,15 @@ def _enrich_targets_with_df_values(df, target_rows):
                     new_rows.append([division, 'CHANNEL-ACCOUNT', val, seed_ca])
                     existing.add((division, 'CHANNEL-ACCOUNT', val))
 
+        # Add GRAND TOTAL entry for each dimension so users can edit it in TARGETS
+        all_dims = [dim for dim, _ in DIM_COL_MAP] + ['CHANNEL-ACCOUNT']
+        for dim in all_dims:
+            gt_key = (division, dim, 'GRAND TOTAL')
+            if gt_key not in existing:
+                seed = _seed(division, dim)
+                new_rows.append([division, dim, 'GRAND TOTAL', seed])
+                existing.add(gt_key)
+
     if not new_rows:
         return target_rows
     return base + new_rows
@@ -812,7 +822,7 @@ def buat_tabel_sos_monthly(df, index_col, dim_label, semua_period, targets):
         if index_cols[0] == 'Source Division':
             division_totals.setdefault(idx_tuple[0], []).append(idx_tuple)
 
-    if index_cols[0] == 'Source Division':
+    if index_cols[0] == 'Source Division' and len(division_totals) > 1:
         for division in sorted(division_totals):
             sub_row = [f'{division} TOTAL'] + [''] * (n_idx - 1) + [get_target(targets, dim_label, 'GRAND TOTAL')]
             for p in ordered_periods:
@@ -1734,6 +1744,11 @@ def get_summary_output_path(output_dir='.', cluster_name=None, extension='.xlsx'
     return os.path.join(output_dir, f'Summary SOS_{cluster}{extension}')
 
 
+def get_store_detail_output_path(output_dir='.', cluster_name=None, extension='.xlsx'):
+    cluster = cluster_name or get_cluster_name(output_dir)
+    return os.path.join(output_dir, f'Store Detail_{cluster}{extension}')
+
+
 def _excel_color(rgb):
     return rgb.replace('#', '')
 
@@ -2154,6 +2169,11 @@ def export_summary_excel(df, targets, output_dir='.', cluster_name=None, target_
     if not wrote_dashboard:
         raise ValueError('Tidak ada data untuk dashboard.')
 
+    # Enrich targets to ensure GRAND TOTAL entries exist for every division × dimension
+    target_rows = _enrich_targets_with_df_values(df, target_rows)
+    if target_rows is not None:
+        targets = _target_rows_to_dict(target_rows)
+
     ws_targets = wb.create_sheet('TARGETS')
     _write_targets_sheet(ws_targets, targets, target_rows=target_rows, divisions=divisions)
 
@@ -2161,6 +2181,115 @@ def export_summary_excel(df, targets, output_dir='.', cluster_name=None, target_
     wb.save(output_path)
     global _last_excel_write_time
     _last_excel_write_time = time.time()
+    return output_path
+
+def export_store_detail_excel(df, output_dir='.', cluster_name=None):
+    divisions = get_source_divisions(df)
+    if not divisions:
+        raise ValueError('Tidak ada data untuk Store Detail.')
+
+    wb = Workbook()
+    default_sheet = wb.active
+    wb.remove(default_sheet)
+
+    used_sheet_names = set()
+    wrote_any = False
+
+    semua_period = sorted(df['Period'].unique(), key=sort_key_period)
+    index_cols = ['Region', 'Area', 'Channel', 'Account', 'Store Code', 'Store Name']
+    index_cols = [c for c in index_cols if c in df.columns]
+
+    df_i = df[~is_competitor(df['Produsen'])]
+    df_k = df[ is_competitor(df['Produsen'])]
+
+    group_cols = index_cols + ['Period', 'Source Division']
+    fi_grp = df_i.groupby(group_cols)['Facing'].sum()
+    fk_grp = df_k.groupby(group_cols)['Facing'].sum()
+
+    for division in divisions:
+        df_div = df[df['Source Division'] == division]
+        if df_div.empty:
+            continue
+
+        sheet_name = sanitize_excel_sheet_name(division, used_sheet_names)
+        ws = wb.create_sheet(sheet_name)
+
+        ordered_periods = [p for p in semua_period if p in df_div['Period'].unique()]
+
+        header1 = [c.upper() for c in index_cols] + ordered_periods
+        header2 = [''] * len(index_cols) + ['SOS%'] * len(ordered_periods)
+
+        _write_rows(ws, [header1, header2])
+
+        all_stores = (
+            df_div[index_cols]
+            .drop_duplicates()
+            .sort_values(index_cols)
+            .itertuples(index=False, name=None)
+        )
+
+        data_rows = []
+        for store_tuple in all_stores:
+            row = list(store_tuple)
+            for p in ordered_periods:
+                grp_key = store_tuple + (p, division)
+                fi = int(round(fi_grp.get(grp_key, 0)))
+                fk = int(round(fk_grp.get(grp_key, 0)))
+                tot = fi + fk
+                sos = (fi / tot) if tot > 0 else 0
+                row.append(sos)
+            data_rows.append(row)
+
+        _write_rows(ws, data_rows)
+
+        ws.column_dimensions['A'].width = 15
+        ws.column_dimensions['B'].width = 15
+        ws.column_dimensions['C'].width = 15
+        ws.column_dimensions['D'].width = 25
+        ws.column_dimensions['E'].width = 15
+        ws.column_dimensions['F'].width = 30
+        for i in range(len(ordered_periods)):
+            col_letter = get_column_letter(len(index_cols) + 1 + i)
+            ws.column_dimensions[col_letter].width = 12
+
+        header1_fill = PatternFill('solid', fgColor='215E9E')
+        header1_font = Font(bold=True, color='FFFFFF')
+        
+        ws.freeze_panes = 'G3'
+        ws.auto_filter.ref = f'A1:{get_column_letter(len(index_cols))}{len(data_rows) + 2}'
+        
+        header2_fill = PatternFill('solid', fgColor='4582B5')
+        header2_font = Font(bold=True, color='FFFFFF')
+
+        for row_cells in ws.iter_rows(min_row=1, max_row=1, min_col=1, max_col=len(header1)):
+            for cell in row_cells:
+                cell.font = header1_font
+                cell.fill = header1_fill
+                cell.alignment = Alignment(horizontal='center', vertical='center')
+                
+        for row_cells in ws.iter_rows(min_row=2, max_row=2, min_col=1, max_col=len(header2)):
+            for cell in row_cells:
+                cell.font = header2_font
+                cell.fill = header2_fill
+                cell.alignment = Alignment(horizontal='center', vertical='center')
+
+        thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), 
+                             top=Side(style='thin'), bottom=Side(style='thin'))
+        for r_idx, row_cells in enumerate(ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=ws.max_column), start=1):
+            for c_idx, cell in enumerate(row_cells, start=1):
+                cell.border = thin_border
+                
+                # Format SOS values as percentage
+                if r_idx > 2 and c_idx > len(index_cols):
+                    cell.number_format = '0.00%'
+
+        wrote_any = True
+
+    if not wrote_any:
+        raise ValueError('Tidak ada data untuk Store Detail.')
+
+    output_path = get_store_detail_output_path(output_dir, cluster_name, extension='.xlsx')
+    wb.save(output_path)
     return output_path
 
 
@@ -2725,10 +2854,16 @@ def proses_data():
             output_dir='.',
             target_rows=target_rows,
         )
+        print(f'Summary SOS berhasil dibuat: {output_path}')
+        
+        output_store_detail = export_store_detail_excel(
+            df,
+            output_dir='.'
+        )
+        print(f'Store Detail berhasil dibuat: {output_store_detail}')
     except ValueError as e:
         print(f'[ERROR] {e}')
         return
-    print(f'Summary SOS berhasil dibuat: {output_path}')
 
 
 # ─────────────────────────── WATCHDOG ──────────────────────────
