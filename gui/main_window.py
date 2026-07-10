@@ -296,7 +296,7 @@ class MainWindow(ctk.CTk):
                     self._q_log(f'[INFO] Membuat Summary SOS_{cluster_name}.xlsx…')
                     output_path = tes.export_summary_excel(
                         df, targets_local, output_dir='.', cluster_name=cluster_name,
-                        target_rows=target_rows,
+                        target_rows=target_rows, df_removed=removed,
                     )
                     self._q_progress(base_prog + step * 0.90)
 

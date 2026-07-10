@@ -314,7 +314,7 @@ class ExcelExportTests(unittest.TestCase):
                 "Summary SOS_Indulgence.xlsx",
             )
             wb = load_workbook(output_path)
-            self.assertEqual(wb.sheetnames, ["Noodle", "Snack", "TARGETS"])
+            self.assertEqual(wb.sheetnames, ["Noodle", "Snack", "TARGETS", "VALIDATION REPORT"])
             targets_ws = wb["TARGETS"]
             target_divisions = {
                 targets_ws.cell(row=row_number, column=1).value
@@ -353,7 +353,7 @@ class ExcelExportTests(unittest.TestCase):
             )
             wb = load_workbook(output_path)
 
-        self.assertEqual(wb.sheetnames, ["Nici", "Noodle", "Oil & Fat", "Snack", "TARGETS"])
+        self.assertEqual(wb.sheetnames, ["Nici", "Noodle", "Oil & Fat", "Snack", "TARGETS", "VALIDATION REPORT"])
 
     def test_excel_dashboard_removes_facing_columns_and_keeps_sos_values(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -817,7 +817,7 @@ class ExcelExportTests(unittest.TestCase):
                 output_path = os.path.join(tmp, expected_name)
                 self.assertTrue(os.path.exists(output_path))
                 self.assertFalse(os.path.exists(f"Summary SOS_{os.path.basename(tmp)}.xlsm"))
-                self.assertEqual(load_workbook(output_path).sheetnames, ["Noodle", "Snack", "TARGETS"])
+                self.assertEqual(load_workbook(output_path).sheetnames, ["Noodle", "Snack", "TARGETS", "VALIDATION REPORT"])
             finally:
                 tes.baca_semua_csv = original_baca_semua_csv
                 os.chdir(original_cwd)

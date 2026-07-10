@@ -27,7 +27,7 @@ N_METRICS     = len(METRIC_LABELS)
 
 WEEK_ORDER = ['W1', 'W2', 'W3', 'W4', 'W5']
 UNKNOWN_SOURCE_DIVISION = 'UNKNOWN'
-METADATA_COLS_FOR_DEDUP = {'_source_file', 'Source Division'}
+METADATA_COLS_FOR_DEDUP = {'_source_file', 'Source Division', 'CSV Row'}
 TARGETS_FILENAME = 'TARGETS.xlsx'
 DEFAULT_TARGET = 65.0
 TARGET_DIM_ORDER = ['REGION', 'CHANNEL', 'ACCOUNT GELATIK', 'CATEGORY CHANNEL', 'CHANNEL-ACCOUNT']
@@ -2144,7 +2144,123 @@ def _write_targets_sheet(ws, targets, target_rows=None, divisions=None):
     ws.auto_filter.ref = f'A1:D{ws.max_row}'
 
 
-def export_summary_excel(df, targets, output_dir='.', cluster_name=None, target_rows=None):
+def _write_validation_report_sheet(ws, df_removed):
+    """Write a VALIDATION REPORT sheet into the given openpyxl worksheet.
+
+    Layout:
+      Section 1 – Summary table:  File Name | Total Rows Removed | Total Facing Lost
+      (blank row)
+      Section 2 – Detail table:   individual removed rows with metadata columns
+    """
+    if df_removed is None or df_removed.empty:
+        ws.append(['Tidak ada data duplikat yang dihapus.'])
+        return
+
+    # ---------- filter valid removed rows ----------
+    mask_complete = (
+        df_removed['Store Code'].notna() &
+        df_removed['Visit Date'].notna() &
+        df_removed['Product Code'].notna()
+    )
+    df_valid_rem = df_removed[mask_complete]
+
+    # ---------- Section 1: Summary per file ----------
+    summary_header = ['FILE NAME', 'TOTAL ROWS REMOVED', 'TOTAL FACING LOST']
+    ws.append(summary_header)
+
+    files = sorted(df_removed['_source_file'].unique()) if '_source_file' in df_removed.columns else []
+    for f in files:
+        if '_source_file' in df_valid_rem.columns:
+            sub = df_valid_rem[df_valid_rem['_source_file'] == f]
+        else:
+            sub = df_valid_rem
+        rows_removed = len(df_removed[df_removed['_source_file'] == f]) if '_source_file' in df_removed.columns else len(df_removed)
+        facing_lost = int(sub['Facing'].fillna(0).sum())
+        ws.append([f, rows_removed, facing_lost])
+
+    summary_end_row = 1 + len(files)  # row 1 = header, then 1 row per file
+
+    # ---------- detail header row = summary rows + 2 blank rows + 1 ----------
+    detail_header_row = summary_end_row + 3  # 2 blank separator rows then header
+
+    # ---------- Section 2: Detail rows ----------
+    detail_cols = ['_source_file', 'CSV Row', 'Region', 'Area', 'Channel', 'Account',
+                   'Store Name', 'Store Code', 'Visit Date', 'Product Code', 'Brand', 'Facing']
+    avail_cols = [c for c in detail_cols if c in df_valid_rem.columns]
+
+    detail_header = avail_cols.copy()
+    if '_source_file' in detail_header:
+        detail_header[detail_header.index('_source_file')] = 'FILE NAME'
+    if 'Facing' in detail_header:
+        detail_header[detail_header.index('Facing')] = 'FACING LOST'
+    detail_header = [h.upper() for h in detail_header]
+
+    # Write detail header explicitly at the correct row
+    for col_idx, val in enumerate(detail_header, 1):
+        ws.cell(row=detail_header_row, column=col_idx, value=val)
+
+    detail_data_df = df_valid_rem[avail_cols].copy()
+    for col in detail_data_df.select_dtypes(include=['datetime64[ns]', 'datetime64[ns, UTC]']).columns:
+        detail_data_df[col] = detail_data_df[col].dt.strftime('%Y-%m-%d')
+
+    current_row = detail_header_row + 1
+    for row_data in detail_data_df.fillna('').itertuples(index=False, name=None):
+        for col_idx, val in enumerate(list(row_data), 1):
+            ws.cell(row=current_row, column=col_idx, value=val)
+        current_row += 1
+
+    last_data_row = current_row - 1 if current_row > detail_header_row + 1 else detail_header_row
+
+    # ---------- Formatting ----------
+    header_fill = PatternFill('solid', fgColor='215E9E')
+    header_font = Font(bold=True, color='FFFFFF')
+    thin = Side(style='thin', color='B7B7B7')
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    # Format summary header (row 1)
+    for col_idx in range(1, 4):
+        cell = ws.cell(row=1, column=col_idx)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+
+    # Format detail header row (same fill as summary header)
+    for col_idx in range(1, len(detail_header) + 1):
+        cell = ws.cell(row=detail_header_row, column=col_idx)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+
+    # Apply borders and center to summary data rows
+    for r_idx in range(1, summary_end_row + 1):
+        for col_idx in range(1, 4):
+            cell = ws.cell(row=r_idx, column=col_idx)
+            cell.border = border
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+
+    # Apply borders and center to detail rows (header + data)
+    for r_idx in range(detail_header_row, last_data_row + 1):
+        for col_idx in range(1, len(detail_header) + 1):
+            cell = ws.cell(row=r_idx, column=col_idx)
+            cell.border = border
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+
+    # Column widths
+    col_widths = {
+        'A': 40, 'B': 10, 'C': 20, 'D': 20, 'E': 18, 'F': 18,
+        'G': 25, 'H': 16, 'I': 14, 'J': 18, 'K': 22, 'L': 14,
+    }
+    for col_letter_key, w in col_widths.items():
+        if col_letter_key in ws.column_dimensions:
+            ws.column_dimensions[col_letter_key].width = w
+        else:
+            ws.column_dimensions[col_letter_key].width = w # Still assign just in case
+
+    # Filter on detail header (FILE NAME only)
+    ws.auto_filter.ref = f'A{detail_header_row}:A{last_data_row}'
+
+
+def export_summary_excel(df, targets, output_dir='.', cluster_name=None, target_rows=None, df_removed=None):
     divisions = get_source_divisions(df)
     if not divisions:
         raise ValueError('Tidak ada data untuk dashboard.')
@@ -2176,6 +2292,10 @@ def export_summary_excel(df, targets, output_dir='.', cluster_name=None, target_
 
     ws_targets = wb.create_sheet('TARGETS')
     _write_targets_sheet(ws_targets, targets, target_rows=target_rows, divisions=divisions)
+
+    # VALIDATION REPORT sheet
+    ws_validation = wb.create_sheet('VALIDATION REPORT')
+    _write_validation_report_sheet(ws_validation, df_removed)
 
     output_path = get_summary_output_path(output_dir, cluster_name, extension='.xlsx')
     wb.save(output_path)
@@ -2704,6 +2824,7 @@ def baca_semua_csv():
             df_temp = pd.read_csv(f, sep=';', low_memory=False)
         df_temp['_source_file'] = os.path.splitext(os.path.basename(f))[0]
         df_temp['Source Division'] = extract_source_division_from_filename(f)
+        df_temp['CSV Row'] = df_temp.index + 2
         dfs.append(df_temp)
 
     combined = pd.concat(dfs, ignore_index=True)
@@ -2853,6 +2974,7 @@ def proses_data():
             targets_local,
             output_dir='.',
             target_rows=target_rows,
+            df_removed=_df_removed,
         )
         print(f'Summary SOS berhasil dibuat: {output_path}')
         
