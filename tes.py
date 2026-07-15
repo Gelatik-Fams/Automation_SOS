@@ -31,7 +31,7 @@ METADATA_COLS_FOR_DEDUP = {'_source_file', 'Source Division', 'CSV Row'}
 TARGETS_FILENAME = 'TARGETS.xlsx'
 DEFAULT_TARGET = 65.0
 TARGET_DIM_ORDER = ['REGION', 'CHANNEL', 'ACCOUNT GELATIK', 'CATEGORY CHANNEL', 'CHANNEL-ACCOUNT']
-EXCEL_CATEGORY_CHART_ROW_STEP = 28
+EXCEL_CATEGORY_CHART_ROW_STEP = 22
 _last_excel_write_time = 0.0
 
 
@@ -2000,8 +2000,8 @@ def _add_division_summary_chart(ws, summary_section, anchor_row):
     chart.x_axis.delete = False
     chart.x_axis.tickLblPos = 'low'
     chart.legend = None
-    chart.width = 20
-    chart.height = 12
+    chart.width = 15
+    chart.height = 9
 
     data = Reference(
         ws,
@@ -2058,8 +2058,8 @@ def _add_category_by_divisi_charts(ws, fmt_section, anchor_row):
         max_num_items = 1
 
     # Gunakan lebar dan jarak kolom yang seragam untuk semua kategori di sheet ini agar rapi sejajar secara vertikal
-    chart_width = 8.0 + (max_num_items * 2.0)
-    chart_height = 12.0
+    chart_width = 6.0 + (max_num_items * 1.5)
+    chart_height = 9.0
     chart_width_cols = int(chart_width / 2.7) + 1
 
     for category_index, category_range in enumerate(cat_ranges):
