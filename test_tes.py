@@ -81,6 +81,26 @@ class SourceDivisionTests(unittest.TestCase):
             tes.UNKNOWN_SOURCE_DIVISION,
         )
 
+    def test_extracts_source_division_from_raw_divisi_column(self):
+        df = pd.DataFrame({"Divisi": ["Pasta", "Pasta", " Pasta "]})
+
+        self.assertEqual(
+            tes.extract_source_division_from_raw_data(df, "Report Product - Jan 25.csv"),
+            "Pasta",
+        )
+
+    def test_extract_source_division_requires_divisi_column(self):
+        df = pd.DataFrame({"Visit Date": ["2025-01-02"]})
+
+        with self.assertRaisesRegex(ValueError, "kolom Divisi tidak ditemukan"):
+            tes.extract_source_division_from_raw_data(df, "Report Product - Jan 25.csv")
+
+    def test_extract_source_division_rejects_mixed_division_file(self):
+        df = pd.DataFrame({"Divisi": ["Pasta", "Noodle"]})
+
+        with self.assertRaisesRegex(ValueError, "lebih dari satu Divisi"):
+            tes.extract_source_division_from_raw_data(df, "Report Product - Jan 25.csv")
+
 
 class FileDiscoveryTests(unittest.TestCase):
     def test_discovers_report_product_csv_in_root_and_division_folders(self):
@@ -132,14 +152,76 @@ class FileDiscoveryTests(unittest.TestCase):
             try:
                 os.chdir(tmp)
                 with open("Report Product - Jan 25 - Pasta.csv", "w", encoding="utf-8", newline="") as f:
-                    f.write("Visit Date,Product Code,Produsen,Facing\n")
-                    f.write('"2025-01-02","SKU\n001","INDOFOOD",10\n')
-                    f.write('"2025-01-02","COMPETITOR SKU","COMPETITOR",5\n')
+                    f.write("Visit Date,Product Code,Produsen,Divisi,Facing\n")
+                    f.write('"2025-01-02","SKU\n001","INDOFOOD","Pasta",10\n')
+                    f.write('"2025-01-02","COMPETITOR SKU","COMPETITOR","Pasta",5\n')
 
                 df = tes.baca_semua_csv()
 
                 self.assertEqual(df.attrs["physical_csv_lines"], 4)
                 self.assertEqual(len(df), 2)
+                self.assertEqual(set(df["Source Division"]), {"Pasta"})
+            finally:
+                os.chdir(original_cwd)
+
+    def test_baca_semua_csv_uses_divisi_column_even_when_filename_has_no_division(self):
+        original_cwd = os.getcwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                os.chdir(tmp)
+                with open("Report Product - Jan 25.csv", "w", encoding="utf-8", newline="") as f:
+                    f.write("Visit Date,Product Code,Produsen,Divisi,Facing\n")
+                    f.write('"2025-01-02","SKU001","INDOFOOD","Pasta",10\n')
+
+                df = tes.baca_semua_csv()
+
+                self.assertEqual(df["Source Division"].tolist(), ["Pasta"])
+            finally:
+                os.chdir(original_cwd)
+
+    def test_baca_semua_csv_reads_each_month_file_and_detects_same_division(self):
+        original_cwd = os.getcwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                os.chdir(tmp)
+                for month in ["Jan", "Feb", "Mar"]:
+                    with open(f"Report Product - {month} 25.csv", "w", encoding="utf-8", newline="") as f:
+                        f.write("Visit Date,Product Code,Produsen,Divisi,Facing\n")
+                        f.write(f'"2025-01-02","SKU-{month}","INDOFOOD","Pasta",10\n')
+
+                df = tes.baca_semua_csv()
+
+                self.assertEqual(len(df), 3)
+                self.assertEqual(set(df["Source Division"]), {"Pasta"})
+            finally:
+                os.chdir(original_cwd)
+
+    def test_baca_semua_csv_fails_when_divisi_column_missing(self):
+        original_cwd = os.getcwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                os.chdir(tmp)
+                with open("Report Product - Jan 25.csv", "w", encoding="utf-8", newline="") as f:
+                    f.write("Visit Date,Product Code,Produsen,Facing\n")
+                    f.write('"2025-01-02","SKU001","INDOFOOD",10\n')
+
+                with self.assertRaisesRegex(ValueError, "kolom Divisi tidak ditemukan"):
+                    tes.baca_semua_csv()
+            finally:
+                os.chdir(original_cwd)
+
+    def test_baca_semua_csv_fails_when_one_file_has_multiple_divisions(self):
+        original_cwd = os.getcwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                os.chdir(tmp)
+                with open("Report Product - Jan 25.csv", "w", encoding="utf-8", newline="") as f:
+                    f.write("Visit Date,Product Code,Produsen,Divisi,Facing\n")
+                    f.write('"2025-01-02","SKU001","INDOFOOD","Pasta",10\n')
+                    f.write('"2025-01-02","SKU002","INDOFOOD","Noodle",10\n')
+
+                with self.assertRaisesRegex(ValueError, "lebih dari satu Divisi"):
+                    tes.baca_semua_csv()
             finally:
                 os.chdir(original_cwd)
 
