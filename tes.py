@@ -59,6 +59,29 @@ def extract_source_division_from_filename(filename):
     return UNKNOWN_SOURCE_DIVISION
 
 
+def extract_source_division_from_raw_data(df, file_label='CSV'):
+    """Ambil Source Division dari kolom raw Divisi; satu file harus berisi satu divisi."""
+    if 'Divisi' not in df.columns:
+        raise ValueError(f'CSV tidak valid: kolom Divisi tidak ditemukan di {file_label}')
+
+    divisions = (
+        df['Divisi']
+        .dropna()
+        .astype(str)
+        .str.strip()
+    )
+    divisions = sorted(v for v in divisions.unique() if v)
+
+    if not divisions:
+        raise ValueError(f'CSV tidak valid: kolom Divisi kosong di {file_label}')
+    if len(divisions) > 1:
+        raise ValueError(
+            f'CSV tidak valid: lebih dari satu Divisi ditemukan di {file_label}: '
+            + ', '.join(divisions)
+        )
+    return divisions[0]
+
+
 def discover_report_product_files(base_dir='.'):
     """Temukan semua Report Product CSV di root dan subfolder division."""
     pattern = os.path.join(base_dir, '**', 'Report Product*.csv')
@@ -2543,21 +2566,28 @@ def baca_semua_csv():
         return None
 
     print(f'[INFO] Membaca {len(files)} file:')
-    print('[INFO] File Count by Source Division')
-    for division, count in count_files_by_source_division(files).items():
-        print(f'{division:<12} {count} files')
     dfs = []
+    division_file_counts = {}
     total_physical_lines = 0
     for f in files:
-        print(f'-> {display_csv_path(f, base_dir)}')
+        display_path = display_csv_path(f, base_dir)
+        print(f'-> {display_path}')
         total_physical_lines += count_physical_text_lines(f)
         try:
             df_temp = pd.read_csv(f, low_memory=False)
         except pd.errors.ParserError:
             df_temp = pd.read_csv(f, sep=';', low_memory=False)
+        source_division = extract_source_division_from_raw_data(df_temp, display_path)
         df_temp['_source_file'] = os.path.splitext(os.path.basename(f))[0]
-        df_temp['Source Division'] = extract_source_division_from_filename(f)
+        df_temp['Source Division'] = source_division
+        division_file_counts[source_division] = division_file_counts.get(source_division, 0) + 1
+        print(f'   Division: {source_division}')
+        print(f'   Rows: {len(df_temp):,}')
         dfs.append(df_temp)
+
+    print('[INFO] File Count by Source Division')
+    for division, count in sorted(division_file_counts.items()):
+        print(f'{division:<12} {count} files')
 
     combined = pd.concat(dfs, ignore_index=True)
 
