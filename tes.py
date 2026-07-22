@@ -2345,9 +2345,12 @@ def export_store_detail_excel(df, output_dir='.', cluster_name=None):
     df_i = df[~is_competitor(df['Produsen'])]
     df_k = df[ is_competitor(df['Produsen'])]
 
-    group_cols = index_cols + ['Period', 'Source Division']
-    fi_grp = df_i.groupby(group_cols)['Facing'].sum()
-    fk_grp = df_k.groupby(group_cols)['Facing'].sum()
+    merge_cols = ['Region', 'Store Code', 'Period', 'Source Division']
+    merge_cols_present = [c for c in merge_cols if c in df.columns]
+
+    fi_grp = df_i.groupby(merge_cols_present)['Facing'].sum()
+    fk_grp = df_k.groupby(merge_cols_present)['Facing'].sum()
+    valid_keys = set(df[merge_cols_present].drop_duplicates().itertuples(index=False, name=None))
 
     for division in divisions:
         df_div = df[df['Source Division'] == division]
@@ -2364,22 +2367,43 @@ def export_store_detail_excel(df, output_dir='.', cluster_name=None):
 
         _write_rows(ws, [header1, header2])
 
+        # Urutkan berdasarkan Region dan Store Code agar posisi baris yang pecah bisa saling berdekatan
+        sort_cols = [c for c in ['Region', 'Store Code'] if c in index_cols]
+        sort_cols += [c for c in index_cols if c not in sort_cols]
+
         all_stores = (
             df_div[index_cols]
             .drop_duplicates()
-            .sort_values(index_cols)
+            .sort_values(sort_cols)
             .itertuples(index=False, name=None)
         )
 
         data_rows = []
         for store_tuple in all_stores:
             row = list(store_tuple)
+            store_dict = dict(zip(index_cols, store_tuple))
+            
             for p in ordered_periods:
-                grp_key = store_tuple + (p, division)
-                fi = int(round(fi_grp.get(grp_key, 0)))
-                fk = int(round(fk_grp.get(grp_key, 0)))
-                tot = fi + fk
-                sos = (fi / tot) if tot > 0 else 0
+                merge_key_list = []
+                for c in merge_cols_present:
+                    if c == 'Period':
+                        merge_key_list.append(p)
+                    elif c == 'Source Division':
+                        merge_key_list.append(division)
+                    else:
+                        merge_key_list.append(store_dict[c])
+                merge_key = tuple(merge_key_list)
+                
+                if merge_key in valid_keys:
+                    fi = int(round(fi_grp.get(merge_key, 0)))
+                    fk = int(round(fk_grp.get(merge_key, 0)))
+                    tot = fi + fk
+                    if tot > 0:
+                        sos = (fi / tot)
+                    else:
+                        sos = 0
+                else:
+                    sos = ''
                 row.append(sos)
             data_rows.append(row)
 

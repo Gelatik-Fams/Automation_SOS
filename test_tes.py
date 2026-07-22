@@ -856,23 +856,23 @@ class ExcelExportTests(unittest.TestCase):
         self.assertEqual(len(bag_noodle_charts), 2)
         
         # Both categories should have uniform dimensions based on the max brand count in the division (7 brands)
-        # 8.0 + 7 * 2.0 = 22.0 cm width
-        self.assertAlmostEqual(cup_noodle_charts[0].width, 22.0)
-        self.assertAlmostEqual(bag_noodle_charts[0].width, 22.0)
+        # 6.0 + 7 * 1.5 = 16.5 cm width
+        self.assertAlmostEqual(cup_noodle_charts[0].width, 16.5)
+        self.assertAlmostEqual(bag_noodle_charts[0].width, 16.5)
         
         # Spacing test: anchor column is uniform for all categories on the sheet
-        # Max brands = 7 -> width = 22 -> chart_width_cols = int(22 / 2.7) + 1 = 9
+        # Max brands = 7 -> width = 16.5 -> chart_width_cols = int(16.5 / 2.7) + 1 = 7
         # Since base_col is 4 (D), first period chart (Jan 25) starts at:
         # Cup noodle: D (4)
         # Bag noodle: D (4)
-        # Second period chart (Feb 25) anchor column is at col index: 4 - 1 + 9 = 12 (column M / 0-indexed 12)
+        # Second period chart (Feb 25) anchor column is at col_letter(4 - 1 + 1*7) = col_letter(10) = K
         # This keeps the months vertically aligned across all categories!
         
         self.assertTrue(cup_noodle_charts[0].anchor.startswith('D'))
-        self.assertTrue(cup_noodle_charts[1].anchor.startswith('M'))
+        self.assertTrue(cup_noodle_charts[1].anchor.startswith('K'))
         
         self.assertTrue(bag_noodle_charts[0].anchor.startswith('D'))
-        self.assertTrue(bag_noodle_charts[1].anchor.startswith('M'))
+        self.assertTrue(bag_noodle_charts[1].anchor.startswith('K'))
 
     def test_export_summary_excel_has_no_vba_dependency_or_macro_output(self):
         with open("tes.py", encoding="utf-8") as f:
