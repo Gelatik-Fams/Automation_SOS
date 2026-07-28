@@ -1,0 +1,5 @@
+# Optional — Google Sheets sync (not required for Excel-only path)
+gspread>=6.0.0
+gspread-formatting>=1.1.0
+google-auth>=2.20.0
+google-auth-oauthlib>=1.0.0
