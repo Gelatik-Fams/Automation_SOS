@@ -12,11 +12,10 @@ Generates per-division SOS (Share of Shelf) summary workbooks from weekly Report
 SOS Dashboard Automation/
 ├── Automation.exe          ← Double-click to run (Windows)
 ├── main.py                 ← Entry point (development)
-├── runner.py               ← CLI/watchdog orchestration and compatibility API
+├── runner.py               ← GUI orchestration and compatibility API
 ├── config.json             ← User preferences (auto-managed)
 ├── VERSION                 ← Version string
 ├── requirements.txt        ← Python dependencies
-├── requirements_sheets.txt ← Optional Google Sheets deps
 ├── gui/                    ← GUI package
 ├── assets/                 ← Logo and icon
 ├── logs/
@@ -178,4 +177,4 @@ A: No. Targets are read from the existing workbook (if present) and merged with 
 A: `config.json` next to the exe / `main.py`. It saves window size and last used folder.
 
 **Q: Can I use this with Google Sheets?**
-A: The engine supports Google Sheets sync via the optional `requirements_sheets.txt` dependencies. The GUI currently generates Excel only.
+A: The supported product workflow is GUI/EXE to Excel output. Google Sheets synchronization and legacy folder monitoring are not part of the supported product.

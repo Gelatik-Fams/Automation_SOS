@@ -1,17 +1,10 @@
-"""Target parsing, defaults, enrichment, and local workbook handling."""
+"""Target parsing, defaults, enrichment, and Summary workbook handling."""
 
-from openpyxl import Workbook
 from openpyxl import load_workbook
-from openpyxl.styles import Alignment
-from openpyxl.styles import Border
-from openpyxl.styles import Font
-from openpyxl.styles import PatternFill
-from openpyxl.styles import Side
 import os
 
 from sos_engine.common import (
     DEFAULT_TARGET,
-    TARGETS_FILENAME,
     TARGET_DIM_ORDER,
     filter_dashboard_by_division,
     get_source_divisions,
@@ -39,42 +32,6 @@ def default_targets_dict():
         (dim, 'DEFAULT'): DEFAULT_TARGET
         for dim in TARGET_DIM_ORDER
     }
-
-
-def buat_targets_excel_default(path=TARGETS_FILENAME):
-    wb = Workbook()
-    ws = wb.active
-    ws.title = 'TARGETS'
-
-    for row in default_target_rows():
-        ws.append(row)
-
-    header_fill = PatternFill('solid', fgColor='1F4E78')
-    header_font = Font(bold=True, color='FFFFFF')
-    thin = Side(style='thin', color='B7B7B7')
-    border = Border(left=thin, right=thin, top=thin, bottom=thin)
-
-    for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=4):
-        for cell in row:
-            cell.border = border
-            cell.alignment = Alignment(vertical='center')
-
-    for cell in ws[1]:
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.alignment = Alignment(horizontal='center', vertical='center')
-
-    for cell in ws['D'][1:]:
-        cell.number_format = '0.0'
-
-    ws.column_dimensions['A'].width = 24
-    ws.column_dimensions['B'].width = 24
-    ws.column_dimensions['C'].width = 34
-    ws.column_dimensions['D'].width = 14
-    ws.freeze_panes = 'A2'
-    ws.auto_filter.ref = f'A1:D{ws.max_row}'
-
-    wb.save(path)
 
 
 def _parse_target_value(value, row_number):
@@ -250,15 +207,3 @@ def load_or_create_summary_targets(summary_path):
     if not os.path.exists(summary_path):
         return default_targets_dict(), None
     return read_targets_from_workbook(summary_path)
-
-
-def baca_target_dari_excel(path=TARGETS_FILENAME):
-    targets, _target_rows = read_targets_from_workbook(path)
-    return targets
-
-
-def load_or_create_local_targets(path=TARGETS_FILENAME):
-    if not os.path.exists(path):
-        buat_targets_excel_default(path)
-        return None
-    return baca_target_dari_excel(path)

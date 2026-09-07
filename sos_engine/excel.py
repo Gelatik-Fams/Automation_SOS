@@ -29,10 +29,6 @@ from sos_engine.common import (
 )
 
 
-def _excel_color(rgb):
-    return rgb.replace('#', '')
-
-
 def _write_rows(ws, rows):
     for row in rows:
         ws.append(row)

@@ -11,10 +11,8 @@ RED_BG   = {'red': 0.918, 'green': 0.600, 'blue': 0.600}
 METRIC_LABELS = ['Indofood', 'Kompetitor', 'Total Facing', 'SOS%', 'Store Count']
 N_METRICS     = len(METRIC_LABELS)
 
-WEEK_ORDER = ['W1', 'W2', 'W3', 'W4', 'W5']
 UNKNOWN_SOURCE_DIVISION = 'UNKNOWN'
 METADATA_COLS_FOR_DEDUP = {'_source_file', 'Source Division', 'CSV Row'}
-TARGETS_FILENAME = 'TARGETS.xlsx'
 DEFAULT_TARGET = 65.0
 TARGET_DIM_ORDER = ['REGION', 'CHANNEL', 'ACCOUNT GELATIK', 'CATEGORY CHANNEL', 'CHANNEL-ACCOUNT']
 EXCEL_CATEGORY_CHART_ROW_STEP = 22

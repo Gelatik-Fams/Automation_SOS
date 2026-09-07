@@ -52,13 +52,6 @@ def _make_df():
 class SmokeTest(unittest.TestCase):
     """Full pipeline: load → validate → enrich → export → validate workbook."""
 
-    def setUp(self):
-        self._orig_sleep = runner.time.sleep
-        runner.time.sleep = lambda _: None
-
-    def tearDown(self):
-        runner.time.sleep = self._orig_sleep
-
     def test_full_pipeline_produces_valid_workbook(self):
         df = _make_df()
         with tempfile.TemporaryDirectory() as tmp:
@@ -131,23 +124,6 @@ class SmokeTest(unittest.TestCase):
         indulgence_targets = runner._build_division_targets(target_rows, 'Indulgence')
         self.assertEqual(nutrition_targets.get(('REGION', 'WEST')), 80.0)
         self.assertEqual(indulgence_targets.get(('REGION', 'WEST')), 60.0)
-
-    def test_proses_data_full_flow(self):
-        orig_cwd = os.getcwd()
-        orig_baca = runner.baca_semua_csv
-        with tempfile.TemporaryDirectory() as tmp:
-            try:
-                os.chdir(tmp)
-                runner.baca_semua_csv = _make_df
-                runner.proses_data()
-                outputs = [f for f in os.listdir(tmp) if f.startswith('Summary SOS_') and f.endswith('.xlsx')]
-                self.assertEqual(len(outputs), 1)
-                wb = load_workbook(os.path.join(tmp, outputs[0]), read_only=True)
-                self.assertIn('TARGETS', wb.sheetnames)
-                wb.close()
-            finally:
-                runner.baca_semua_csv = orig_baca
-                os.chdir(orig_cwd)
 
     def test_validate_workbook_helper_detects_missing_targets(self):
         from gui.utils import validate_workbook

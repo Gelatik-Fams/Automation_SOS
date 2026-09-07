@@ -18,52 +18,6 @@ def dataframe_with_produsen(rows):
     return df
 
 
-class FakeSpreadsheet:
-    def __init__(self):
-        self.batch_updates = []
-
-    def fetch_sheet_metadata(self):
-        return {"sheets": [{"properties": {"sheetId": 1}}]}
-
-    def batch_update(self, *args, **kwargs):
-        self.batch_updates.append((args, kwargs))
-        return None
-
-
-class FakeWorksheet:
-    id = 1
-
-    def __init__(self, b1_value=""):
-        self.spreadsheet = FakeSpreadsheet()
-        self.updated_values = None
-        self.frozen = None
-        self.b1_value = b1_value
-        self.cleared = False
-        self.batch_clears = []
-
-    def clear(self):
-        self.cleared = True
-        return None
-
-    def batch_clear(self, ranges):
-        self.batch_clears.append(ranges)
-
-    def update(self, range_name=None, values=None):
-        self.updated_values = values
-
-    def acell(self, label):
-        class Cell:
-            def __init__(self, value):
-                self.value = value
-        return Cell(self.b1_value if label == "B1" else "")
-
-    def get_all_values(self):
-        return []
-
-    def freeze(self, rows=None, cols=None):
-        self.frozen = (rows, cols)
-
-
 class SourceDivisionTests(unittest.TestCase):
     def test_extracts_source_division_from_last_filename_segment(self):
         self.assertEqual(
@@ -345,38 +299,6 @@ class LocalTargetsFileTests(unittest.TestCase):
             self.assertIn("TARGETS", str(ctx.exception))
             wb_after = load_workbook(path)
             self.assertEqual(wb_after.sheetnames, ["DASHBOARD", "TARGETS"])
-
-    def test_dashboard_target_reader_accepts_local_targets_dict(self):
-        ws = FakeWorksheet()
-
-        targets = runner.baca_target_dari_dashboard(ws, {
-            ("REGION", "WEST"): 82.0,
-        })
-
-        self.assertEqual(targets, {("REGION", "WEST"): 82.0})
-
-    def test_first_run_exports_summary_xlsx_with_embedded_targets_and_no_targets_xlsx(self):
-        original_cwd = os.getcwd()
-        original_baca_semua_csv = runner.baca_semua_csv
-        with tempfile.TemporaryDirectory() as tmp:
-            try:
-                os.chdir(tmp)
-
-                runner.baca_semua_csv = ExcelExportTests().make_df
-                runner.proses_data()
-
-                expected_name = f"Summary SOS_{os.path.basename(tmp)}.xlsx"
-                self.assertTrue(os.path.exists(expected_name))
-                self.assertFalse(os.path.exists("TARGETS.xlsx"))
-                wb = load_workbook(expected_name)
-                self.assertEqual(
-                    [wb["TARGETS"]["A1"].value, wb["TARGETS"]["B1"].value, wb["TARGETS"]["C1"].value, wb["TARGETS"]["D1"].value],
-                    ["Division", "Dimension", "Name", "Target"],
-                )
-            finally:
-                runner.baca_semua_csv = original_baca_semua_csv
-                os.chdir(original_cwd)
-
 
 class ExcelExportTests(unittest.TestCase):
     def make_df(self):
@@ -885,26 +807,6 @@ class ExcelExportTests(unittest.TestCase):
         self.assertNotIn("add_vba_to_workbook", source)
         self.assertNotIn("enable_vba", source)
 
-    def test_proses_data_exports_summary_xlsx_from_embedded_targets(self):
-        original_cwd = os.getcwd()
-        original_baca_semua_csv = runner.baca_semua_csv
-        with tempfile.TemporaryDirectory() as tmp:
-            try:
-                os.chdir(tmp)
-                runner.baca_semua_csv = self.make_df
-
-                runner.proses_data()
-
-                expected_name = f"Summary SOS_{os.path.basename(tmp)}.xlsx"
-                output_path = os.path.join(tmp, expected_name)
-                self.assertTrue(os.path.exists(output_path))
-                self.assertFalse(os.path.exists(f"Summary SOS_{os.path.basename(tmp)}.xlsm"))
-                self.assertEqual(load_workbook(output_path).sheetnames, ["Noodle", "Snack", "TARGETS", "VALIDATION REPORT"])
-            finally:
-                runner.baca_semua_csv = original_baca_semua_csv
-                os.chdir(original_cwd)
-
-
 class StoreDetailExportTests(unittest.TestCase):
     def make_df(self):
         return dataframe_with_produsen([
@@ -978,59 +880,7 @@ class StoreDetailExportTests(unittest.TestCase):
                 ['WEST', 'BANDUNG', 'GT', 'RETAIL', '1001', 'TOKO A', 0.25, 1.0]
             )
 
-class StoreDetailTests(unittest.TestCase):
-    def test_period_is_pivot_axis_not_left_identity_column(self):
-        df = dataframe_with_produsen([
-            {
-                "Period": "Jan 25",
-                "Visit Date": pd.Timestamp("2025-01-02"),
-                "Week": "W1",
-                "Region": "WEST",
-                "Area": "BANDUNG",
-                "Channel": "MT",
-                "Account": "ACC",
-                "Store Code": "S001",
-                "Store Name": "Store One",
-                "Username": "user1",
-                "Full Name": "User One",
-                "Product Code": "SKU001",
-                "Facing": 10,
-            },
-            {
-                "Period": "Jan 25",
-                "Visit Date": pd.Timestamp("2025-01-02"),
-                "Week": "W1",
-                "Region": "WEST",
-                "Area": "BANDUNG",
-                "Channel": "MT",
-                "Account": "ACC",
-                "Store Code": "S001",
-                "Store Name": "Store One",
-                "Username": "user1",
-                "Full Name": "User One",
-                "Product Code": "COMPETITOR SKU",
-                "Facing": 5,
-            },
-        ])
-        ws = FakeWorksheet()
-
-        runner.buat_store_detail(ws, df)
-
-        header1 = ws.updated_values[0]
-        self.assertEqual(header1[:3], ["Region", "Area", "Store Name"])
-        self.assertNotIn("Period", header1[:3])
-        self.assertIn("Jan 25", header1)
-        self.assertEqual(ws.frozen, (2, 3))
-
-
 class DashboardDivisionAwareTests(unittest.TestCase):
-    def setUp(self):
-        self._orig_sleep = runner.time.sleep
-        runner.time.sleep = lambda _seconds: None
-
-    def tearDown(self):
-        runner.time.sleep = self._orig_sleep
-
     def make_dashboard_df(self):
         return dataframe_with_produsen([
             {
@@ -1184,104 +1034,6 @@ class DashboardDivisionAwareTests(unittest.TestCase):
         self.assertIn(["Snack", "MT TOTAL", "", "", 3, 7, 10, 30.0], rows)
         self.assertEqual(meta["target_col_idx"], 3)
         self.assertEqual(meta["sos_col_indices"], [7])
-
-    def test_dashboard_region_section_uses_division_dimension_when_available(self):
-        df = self.make_dashboard_df()
-        ws = FakeWorksheet()
-
-        runner.buat_dashboard(ws, df)
-
-        title_idx = ws.updated_values.index(["SOS% BY REGION"])
-        self.assertEqual(
-            ws.updated_values[title_idx + 1][:3],
-            ["DIVISION", "Region", "TARGET"],
-        )
-
-        titles = [row[0] for row in ws.updated_values if row]
-        self.assertNotIn("SOS% BY REGION x DIVISI", titles)
-        self.assertNotIn("SOS% BY ACCOUNT x DIVISI", titles)
-        self.assertNotIn("SOS% BY CATEGORY BY DIVISI", titles)
-
-    def test_dashboard_all_mode_preserves_selector_and_shows_full_division_summary(self):
-        ws = FakeWorksheet(b1_value="ALL")
-
-        runner.buat_dashboard(ws, self.make_dashboard_df())
-
-        self.assertFalse(ws.cleared)
-        self.assertIn(["A2:ZZZ"], ws.batch_clears)
-        self.assertEqual(ws.updated_values[0], ["DIVISION", "ALL"])
-        self.assertEqual(ws.updated_values[2], ["DIVISION SUMMARY"])
-        self.assertIn(["Noodle", 75.0], ws.updated_values)
-        self.assertIn(["Snack", 25.0], ws.updated_values)
-
-    def test_dashboard_single_division_mode_keeps_all_rows_for_apps_script_filter(self):
-        ws = FakeWorksheet(b1_value="Noodle")
-
-        runner.buat_dashboard(ws, self.make_dashboard_df())
-
-        self.assertEqual(ws.updated_values[0], ["DIVISION", "Noodle"])
-        self.assertIn(["Noodle", 75.0], ws.updated_values)
-        self.assertIn(["Snack", 25.0], ws.updated_values)
-
-        region_title = ws.updated_values.index(["SOS% BY REGION"])
-        next_title = ws.updated_values.index(["SOS% BY CHANNEL"])
-        region_rows = ws.updated_values[region_title:next_title]
-        self.assertIn(["Noodle", "WEST", 65.0, 30, 10, 40, 75.0], region_rows)
-        self.assertIn(["Snack", "EAST", 65.0, 10, 30, 40, 25.0], region_rows)
-
-    def test_dashboard_invalid_division_selector_falls_back_to_all(self):
-        ws = FakeWorksheet(b1_value="Bad Division")
-
-        runner.buat_dashboard(ws, self.make_dashboard_df())
-
-        self.assertEqual(ws.updated_values[0], ["DIVISION", "ALL"])
-        region_title = ws.updated_values.index(["SOS% BY REGION"])
-        next_title = ws.updated_values.index(["SOS% BY CHANNEL"])
-        region_rows = ws.updated_values[region_title:next_title]
-        self.assertIn(["Noodle", "WEST", 65.0, 30, 10, 40, 75.0], region_rows)
-        self.assertIn(["Snack", "EAST", 65.0, 10, 30, 40, 25.0], region_rows)
-
-    def chart_requests_from(self, ws):
-        chart_requests = []
-        for args, _kwargs in ws.spreadsheet.batch_updates:
-            if args and isinstance(args[0], dict):
-                chart_requests.extend([
-                    r for r in args[0].get("requests", [])
-                    if "addChart" in r
-                ])
-        return chart_requests
-
-    def test_dashboard_all_mode_creates_division_summary_chart(self):
-        ws = FakeWorksheet(b1_value="ALL")
-
-        runner.buat_dashboard(ws, self.make_dashboard_df())
-
-        chart_requests = self.chart_requests_from(ws)
-        titles = [
-            r["addChart"]["chart"]["spec"].get("title")
-            for r in chart_requests
-        ]
-        self.assertEqual(titles, ["DIVISION SUMMARY"])
-        row_index = chart_requests[0]["addChart"]["chart"]["position"]["overlayPosition"]["anchorCell"]["rowIndex"]
-        self.assertGreaterEqual(row_index, len(ws.updated_values))
-
-    def test_dashboard_selected_division_reuses_category_by_divisi_chart(self):
-        ws = FakeWorksheet(b1_value="Noodle")
-
-        runner.buat_dashboard(ws, self.make_dashboard_df())
-
-        chart_requests = self.chart_requests_from(ws)
-        titles = [
-            r["addChart"]["chart"]["spec"].get("title", "")
-            for r in chart_requests
-        ]
-        self.assertTrue(any("BAG NOODLE" in title for title in titles))
-        self.assertNotIn("DIVISION SUMMARY", titles)
-        row_indexes = [
-            r["addChart"]["chart"]["position"]["overlayPosition"]["anchorCell"]["rowIndex"]
-            for r in chart_requests
-        ]
-        self.assertTrue(all(row_index >= len(ws.updated_values) for row_index in row_indexes))
 
     def test_single_division_skips_division_subtotal_row(self):
         """When data has only 1 division, [Divisi] TOTAL row should NOT appear."""

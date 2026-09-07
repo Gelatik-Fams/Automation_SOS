@@ -6,11 +6,11 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[('assets', 'assets'), ('VERSION', '.')],
-    hiddenimports=['customtkinter', 'PIL', 'PIL._tkinter_finder', 'openpyxl', 'openpyxl.chart', 'openpyxl.chart.label', 'openpyxl.formatting.rule', 'openpyxl.styles', 'watchdog', 'watchdog.observers.polling', 'watchdog.events'],
+    hiddenimports=['customtkinter', 'PIL', 'PIL._tkinter_finder', 'openpyxl', 'openpyxl.chart', 'openpyxl.chart.label', 'openpyxl.formatting.rule', 'openpyxl.styles'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['gspread', 'google', 'matplotlib', 'scipy', 'IPython'],
+    excludes=['matplotlib', 'scipy', 'IPython'],
     noarchive=False,
     optimize=0,
 )
