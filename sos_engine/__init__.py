@@ -1,1 +1,1 @@
-"""SOS engine modules extracted from the original tes entry point."""
+"""SOS engine modules used by the runner orchestration entry point."""

@@ -1,7 +1,7 @@
 """Compatibility API and CLI/watchdog orchestration.
 
 Engine functions are re-exported under their original names. Keep orchestration,
-summary export, and the watchdog timestamp here so existing tes monkeypatches
+summary export, and the watchdog timestamp here so existing runner monkeypatches
 and the shared export/event state retain their original lookup behavior.
 """
 
@@ -176,7 +176,7 @@ def export_summary_excel(df, targets, output_dir='.', cluster_name=None, target_
     return output_path
 
 
-# CLI orchestration intentionally resolves its dependencies through tes globals.
+# CLI orchestration intentionally resolves its dependencies through runner globals.
 def proses_data():
     summary_path = get_summary_output_path('.', extension='.xlsx')
     try:

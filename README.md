@@ -12,7 +12,7 @@ Generates per-division SOS (Share of Shelf) summary workbooks from weekly Report
 SOS Dashboard Automation/
 ├── Automation.exe          ← Double-click to run (Windows)
 ├── main.py                 ← Entry point (development)
-├── tes.py                  ← Engine (do not edit)
+├── runner.py               ← CLI/watchdog orchestration and compatibility API
 ├── config.json             ← User preferences (auto-managed)
 ├── VERSION                 ← Version string
 ├── requirements.txt        ← Python dependencies
