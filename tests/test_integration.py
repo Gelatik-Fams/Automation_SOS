@@ -10,11 +10,11 @@ import unittest
 import pandas as pd
 from openpyxl import load_workbook
 
-import tes
+import runner
 
 
 def _make_df():
-    """Minimal valid DataFrame matching tes.validasi_data expectations."""
+    """Minimal valid DataFrame matching runner.validasi_data expectations."""
     rows = []
     for division, region, channel, account, cat in [
         ('Nutrition', 'WEST', 'MT', 'ALPHA', 'INSTANT NOODLE'),
@@ -52,25 +52,18 @@ def _make_df():
 class SmokeTest(unittest.TestCase):
     """Full pipeline: load → validate → enrich → export → validate workbook."""
 
-    def setUp(self):
-        self._orig_sleep = tes.time.sleep
-        tes.time.sleep = lambda _: None
-
-    def tearDown(self):
-        tes.time.sleep = self._orig_sleep
-
     def test_full_pipeline_produces_valid_workbook(self):
         df = _make_df()
         with tempfile.TemporaryDirectory() as tmp:
-            df_clean, removed = tes.validasi_data(df)
+            df_clean, removed = runner.validasi_data(df)
             self.assertGreater(len(df_clean), 0)
             self.assertEqual(len(removed), 0)
 
             target_rows = [['Division', 'Dimension', 'Name', 'Target']]
-            target_rows = tes._enrich_targets_with_df_values(df_clean, target_rows)
-            targets = tes._target_rows_to_dict(target_rows)
+            target_rows = runner._enrich_targets_with_df_values(df_clean, target_rows)
+            targets = runner._target_rows_to_dict(target_rows)
 
-            output_path = tes.export_summary_excel(
+            output_path = runner.export_summary_excel(
                 df_clean, targets, output_dir=tmp,
                 cluster_name='IntegrationTest', target_rows=target_rows,
             )
@@ -93,10 +86,10 @@ class SmokeTest(unittest.TestCase):
     def test_workbook_has_data_in_division_sheets(self):
         df = _make_df()
         with tempfile.TemporaryDirectory() as tmp:
-            df_clean, _ = tes.validasi_data(df)
-            target_rows = tes._enrich_targets_with_df_values(df_clean, None)
-            targets = tes._target_rows_to_dict(target_rows)
-            output_path = tes.export_summary_excel(
+            df_clean, _ = runner.validasi_data(df)
+            target_rows = runner._enrich_targets_with_df_values(df_clean, None)
+            targets = runner._target_rows_to_dict(target_rows)
+            output_path = runner.export_summary_excel(
                 df_clean, targets, output_dir=tmp,
                 cluster_name='DataCheck', target_rows=target_rows,
             )
@@ -113,7 +106,7 @@ class SmokeTest(unittest.TestCase):
             ['Division', 'Dimension', 'Name', 'Target'],
             ['Nutrition', 'REGION', 'DEFAULT', 65.0],
         ]
-        enriched = tes._enrich_targets_with_df_values(df, base)
+        enriched = runner._enrich_targets_with_df_values(df, base)
         # Base rows preserved
         self.assertEqual(enriched[0], base[0])
         self.assertIn(base[1], enriched)
@@ -127,27 +120,10 @@ class SmokeTest(unittest.TestCase):
             ['Nutrition', 'REGION', 'WEST', 80.0],
             ['Indulgence', 'REGION', 'WEST', 60.0],
         ]
-        nutrition_targets = tes._build_division_targets(target_rows, 'Nutrition')
-        indulgence_targets = tes._build_division_targets(target_rows, 'Indulgence')
+        nutrition_targets = runner._build_division_targets(target_rows, 'Nutrition')
+        indulgence_targets = runner._build_division_targets(target_rows, 'Indulgence')
         self.assertEqual(nutrition_targets.get(('REGION', 'WEST')), 80.0)
         self.assertEqual(indulgence_targets.get(('REGION', 'WEST')), 60.0)
-
-    def test_proses_data_full_flow(self):
-        orig_cwd = os.getcwd()
-        orig_baca = tes.baca_semua_csv
-        with tempfile.TemporaryDirectory() as tmp:
-            try:
-                os.chdir(tmp)
-                tes.baca_semua_csv = _make_df
-                tes.proses_data()
-                outputs = [f for f in os.listdir(tmp) if f.startswith('Summary SOS_') and f.endswith('.xlsx')]
-                self.assertEqual(len(outputs), 1)
-                wb = load_workbook(os.path.join(tmp, outputs[0]), read_only=True)
-                self.assertIn('TARGETS', wb.sheetnames)
-                wb.close()
-            finally:
-                tes.baca_semua_csv = orig_baca
-                os.chdir(orig_cwd)
 
     def test_validate_workbook_helper_detects_missing_targets(self):
         from gui.utils import validate_workbook
@@ -165,10 +141,10 @@ class SmokeTest(unittest.TestCase):
         from gui.utils import validate_workbook
         df = _make_df()
         with tempfile.TemporaryDirectory() as tmp:
-            df_clean, _ = tes.validasi_data(df)
-            target_rows = tes._enrich_targets_with_df_values(df_clean, None)
-            targets = tes._target_rows_to_dict(target_rows)
-            output_path = tes.export_summary_excel(
+            df_clean, _ = runner.validasi_data(df)
+            target_rows = runner._enrich_targets_with_df_values(df_clean, None)
+            targets = runner._target_rows_to_dict(target_rows)
+            output_path = runner.export_summary_excel(
                 df_clean, targets, output_dir=tmp,
                 cluster_name='Valid', target_rows=target_rows,
             )

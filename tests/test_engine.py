@@ -5,7 +5,7 @@ import tempfile
 from openpyxl import Workbook, load_workbook
 import pandas as pd
 
-import tes
+import runner
 
 
 def dataframe_with_produsen(rows):
@@ -18,56 +18,10 @@ def dataframe_with_produsen(rows):
     return df
 
 
-class FakeSpreadsheet:
-    def __init__(self):
-        self.batch_updates = []
-
-    def fetch_sheet_metadata(self):
-        return {"sheets": [{"properties": {"sheetId": 1}}]}
-
-    def batch_update(self, *args, **kwargs):
-        self.batch_updates.append((args, kwargs))
-        return None
-
-
-class FakeWorksheet:
-    id = 1
-
-    def __init__(self, b1_value=""):
-        self.spreadsheet = FakeSpreadsheet()
-        self.updated_values = None
-        self.frozen = None
-        self.b1_value = b1_value
-        self.cleared = False
-        self.batch_clears = []
-
-    def clear(self):
-        self.cleared = True
-        return None
-
-    def batch_clear(self, ranges):
-        self.batch_clears.append(ranges)
-
-    def update(self, range_name=None, values=None):
-        self.updated_values = values
-
-    def acell(self, label):
-        class Cell:
-            def __init__(self, value):
-                self.value = value
-        return Cell(self.b1_value if label == "B1" else "")
-
-    def get_all_values(self):
-        return []
-
-    def freeze(self, rows=None, cols=None):
-        self.frozen = (rows, cols)
-
-
 class SourceDivisionTests(unittest.TestCase):
     def test_extracts_source_division_from_last_filename_segment(self):
         self.assertEqual(
-            tes.extract_source_division_from_filename(
+            runner.extract_source_division_from_filename(
                 "Report Product - Mei 25 - Oil & Fat.csv"
             ),
             "Oil & Fat",
@@ -75,17 +29,17 @@ class SourceDivisionTests(unittest.TestCase):
 
     def test_old_filename_without_division_returns_unknown(self):
         self.assertEqual(
-            tes.extract_source_division_from_filename(
+            runner.extract_source_division_from_filename(
                 "Report Product - Januari 2024.csv"
             ),
-            tes.UNKNOWN_SOURCE_DIVISION,
+            runner.UNKNOWN_SOURCE_DIVISION,
         )
 
     def test_extracts_source_division_from_raw_divisi_column(self):
         df = pd.DataFrame({"Divisi": ["Pasta", "Pasta", " Pasta "]})
 
         self.assertEqual(
-            tes.extract_source_division_from_raw_data(df, "Report Product - Jan 25.csv"),
+            runner.extract_source_division_from_raw_data(df, "Report Product - Jan 25.csv"),
             "Pasta",
         )
 
@@ -93,13 +47,13 @@ class SourceDivisionTests(unittest.TestCase):
         df = pd.DataFrame({"Visit Date": ["2025-01-02"]})
 
         with self.assertRaisesRegex(ValueError, "kolom Divisi tidak ditemukan"):
-            tes.extract_source_division_from_raw_data(df, "Report Product - Jan 25.csv")
+            runner.extract_source_division_from_raw_data(df, "Report Product - Jan 25.csv")
 
     def test_extract_source_division_rejects_mixed_division_file(self):
         df = pd.DataFrame({"Divisi": ["Pasta", "Noodle"]})
 
         with self.assertRaisesRegex(ValueError, "lebih dari satu Divisi"):
-            tes.extract_source_division_from_raw_data(df, "Report Product - Jan 25.csv")
+            runner.extract_source_division_from_raw_data(df, "Report Product - Jan 25.csv")
 
 
 class FileDiscoveryTests(unittest.TestCase):
@@ -121,7 +75,7 @@ class FileDiscoveryTests(unittest.TestCase):
 
             found = [
                 os.path.relpath(p, tmp).replace(os.sep, "/")
-                for p in tes.discover_report_product_files(tmp)
+                for p in runner.discover_report_product_files(tmp)
             ]
 
         self.assertEqual(found, [
@@ -140,10 +94,10 @@ class FileDiscoveryTests(unittest.TestCase):
             "Report Product - Jan 25.csv",
         ]
 
-        self.assertEqual(tes.count_files_by_source_division(files), {
+        self.assertEqual(runner.count_files_by_source_division(files), {
             "NICI": 1,
             "SIMP": 2,
-            tes.UNKNOWN_SOURCE_DIVISION: 1,
+            runner.UNKNOWN_SOURCE_DIVISION: 1,
         })
 
     def test_baca_semua_csv_keeps_physical_line_count_for_user_log(self):
@@ -156,7 +110,7 @@ class FileDiscoveryTests(unittest.TestCase):
                     f.write('"2025-01-02","SKU\n001","INDOFOOD","Pasta",10\n')
                     f.write('"2025-01-02","COMPETITOR SKU","COMPETITOR","Pasta",5\n')
 
-                df = tes.baca_semua_csv()
+                df = runner.baca_semua_csv()
 
                 self.assertEqual(df.attrs["physical_csv_lines"], 4)
                 self.assertEqual(len(df), 2)
@@ -173,7 +127,7 @@ class FileDiscoveryTests(unittest.TestCase):
                     f.write("Visit Date,Product Code,Produsen,Divisi,Facing\n")
                     f.write('"2025-01-02","SKU001","INDOFOOD","Pasta",10\n')
 
-                df = tes.baca_semua_csv()
+                df = runner.baca_semua_csv()
 
                 self.assertEqual(df["Source Division"].tolist(), ["Pasta"])
             finally:
@@ -189,7 +143,7 @@ class FileDiscoveryTests(unittest.TestCase):
                         f.write("Visit Date,Product Code,Produsen,Divisi,Facing\n")
                         f.write(f'"2025-01-02","SKU-{month}","INDOFOOD","Pasta",10\n')
 
-                df = tes.baca_semua_csv()
+                df = runner.baca_semua_csv()
 
                 self.assertEqual(len(df), 3)
                 self.assertEqual(set(df["Source Division"]), {"Pasta"})
@@ -206,7 +160,7 @@ class FileDiscoveryTests(unittest.TestCase):
                     f.write('"2025-01-02","SKU001","INDOFOOD",10\n')
 
                 with self.assertRaisesRegex(ValueError, "kolom Divisi tidak ditemukan"):
-                    tes.baca_semua_csv()
+                    runner.baca_semua_csv()
             finally:
                 os.chdir(original_cwd)
 
@@ -221,7 +175,7 @@ class FileDiscoveryTests(unittest.TestCase):
                     f.write('"2025-01-02","SKU002","INDOFOOD","Noodle",10\n')
 
                 with self.assertRaisesRegex(ValueError, "lebih dari satu Divisi"):
-                    tes.baca_semua_csv()
+                    runner.baca_semua_csv()
             finally:
                 os.chdir(original_cwd)
 
@@ -250,14 +204,14 @@ class ValidationFreezeTests(unittest.TestCase):
             },
         ])
 
-        result = tes.calc_sos(df, ["Region"])
+        result = runner.calc_sos(df, ["Region"])
 
         self.assertEqual(result.loc[0, "fi"], 30)
         self.assertEqual(result.loc[0, "fk"], 20)
         self.assertEqual(result.loc[0, "SOS%"], 60.0)
 
     def test_dashboard_does_not_keep_unused_compliance_dead_code(self):
-        with open("tes.py", encoding="utf-8") as f:
+        with open("runner.py", encoding="utf-8") as f:
             source = f.read()
 
         for token in ("calc_" + "compliance", "compliance_" + "map"):
@@ -283,7 +237,7 @@ class ValidationFreezeTests(unittest.TestCase):
             },
         ])
 
-        cleaned, removed = tes.validasi_data(df)
+        cleaned, removed = runner.validasi_data(df)
 
         self.assertEqual(len(cleaned), 1)
         self.assertEqual(len(removed), 1)
@@ -291,7 +245,7 @@ class ValidationFreezeTests(unittest.TestCase):
 
 class LocalTargetsFileTests(unittest.TestCase):
     def test_default_target_rows_use_embedded_four_column_structure(self):
-        rows = tes.default_target_rows(["Noodle", "Snack"])
+        rows = runner.default_target_rows(["Noodle", "Snack"])
 
         self.assertEqual(rows[0], ["Division", "Dimension", "Name", "Target"])
         self.assertIn(["Noodle", "REGION", "DEFAULT", 65.0], rows)
@@ -301,7 +255,7 @@ class LocalTargetsFileTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "Summary SOS_Test.xlsx")
 
-            targets, target_rows = tes.load_or_create_summary_targets(path)
+            targets, target_rows = runner.load_or_create_summary_targets(path)
 
             self.assertFalse(os.path.exists(path))
             self.assertFalse(os.path.exists(os.path.join(tmp, "TARGETS.xlsx")))
@@ -320,7 +274,7 @@ class LocalTargetsFileTests(unittest.TestCase):
             targets_ws.append(["Snack", "CHANNEL", "MT", "70,5"])
             wb.save(path)
 
-            targets, target_rows = tes.load_or_create_summary_targets(path)
+            targets, target_rows = runner.load_or_create_summary_targets(path)
 
             self.assertEqual(targets[("REGION", "WEST")], 80.0)
             self.assertEqual(targets[("CHANNEL", "MT")], 70.5)
@@ -340,43 +294,11 @@ class LocalTargetsFileTests(unittest.TestCase):
             wb.save(path)
 
             with self.assertRaises(ValueError) as ctx:
-                tes.load_or_create_summary_targets(path)
+                runner.load_or_create_summary_targets(path)
 
             self.assertIn("TARGETS", str(ctx.exception))
             wb_after = load_workbook(path)
             self.assertEqual(wb_after.sheetnames, ["DASHBOARD", "TARGETS"])
-
-    def test_dashboard_target_reader_accepts_local_targets_dict(self):
-        ws = FakeWorksheet()
-
-        targets = tes.baca_target_dari_dashboard(ws, {
-            ("REGION", "WEST"): 82.0,
-        })
-
-        self.assertEqual(targets, {("REGION", "WEST"): 82.0})
-
-    def test_first_run_exports_summary_xlsx_with_embedded_targets_and_no_targets_xlsx(self):
-        original_cwd = os.getcwd()
-        original_baca_semua_csv = tes.baca_semua_csv
-        with tempfile.TemporaryDirectory() as tmp:
-            try:
-                os.chdir(tmp)
-
-                tes.baca_semua_csv = ExcelExportTests().make_df
-                tes.proses_data()
-
-                expected_name = f"Summary SOS_{os.path.basename(tmp)}.xlsx"
-                self.assertTrue(os.path.exists(expected_name))
-                self.assertFalse(os.path.exists("TARGETS.xlsx"))
-                wb = load_workbook(expected_name)
-                self.assertEqual(
-                    [wb["TARGETS"]["A1"].value, wb["TARGETS"]["B1"].value, wb["TARGETS"]["C1"].value, wb["TARGETS"]["D1"].value],
-                    ["Division", "Dimension", "Name", "Target"],
-                )
-            finally:
-                tes.baca_semua_csv = original_baca_semua_csv
-                os.chdir(original_cwd)
-
 
 class ExcelExportTests(unittest.TestCase):
     def make_df(self):
@@ -384,7 +306,7 @@ class ExcelExportTests(unittest.TestCase):
 
     def test_export_summary_excel_creates_only_dashboard_and_targets(self):
         with tempfile.TemporaryDirectory() as tmp:
-            output_path = tes.export_summary_excel(
+            output_path = runner.export_summary_excel(
                 self.make_df(),
                 {("REGION", "WEST"): 70},
                 output_dir=tmp,
@@ -427,7 +349,7 @@ class ExcelExportTests(unittest.TestCase):
         df = pd.concat([df, dataframe_with_produsen(extra)], ignore_index=True)
 
         with tempfile.TemporaryDirectory() as tmp:
-            output_path = tes.export_summary_excel(
+            output_path = runner.export_summary_excel(
                 df,
                 {("REGION", "WEST"): 70},
                 output_dir=tmp,
@@ -439,7 +361,7 @@ class ExcelExportTests(unittest.TestCase):
 
     def test_excel_dashboard_removes_facing_columns_and_keeps_sos_values(self):
         with tempfile.TemporaryDirectory() as tmp:
-            output_path = tes.export_summary_excel(
+            output_path = runner.export_summary_excel(
                 self.make_df(),
                 {("REGION", "WEST"): 70},
                 output_dir=tmp,
@@ -462,14 +384,14 @@ class ExcelExportTests(unittest.TestCase):
         self.assertEqual(list(noodle_row[:4]), ["Noodle", "WEST", 70, 75.0])
 
     def test_excel_conditional_format_ranges_only_target_detail_sos_cells(self):
-        payload = tes.dashboard_payload_sos_only(
-            tes.build_dashboard_payload(
+        payload = runner.dashboard_payload_sos_only(
+            runner.build_dashboard_payload(
                 self.make_df(),
                 {("REGION", "WEST"): 70},
             )
         )
 
-        ranges = tes.get_excel_conditional_format_ranges(payload)
+        ranges = runner.get_excel_conditional_format_ranges(payload)
 
         self.assertTrue(ranges)
         self.assertFalse(any(r["chart_source"] for r in ranges))
@@ -483,7 +405,7 @@ class ExcelExportTests(unittest.TestCase):
 
     def test_excel_conditional_formatting_uses_green_pass_fill_and_same_row_target(self):
         with tempfile.TemporaryDirectory() as tmp:
-            output_path = tes.export_summary_excel(
+            output_path = runner.export_summary_excel(
                 self.make_df(),
                 {("REGION", "WEST"): 70},
                 output_dir=tmp,
@@ -524,10 +446,10 @@ class ExcelExportTests(unittest.TestCase):
             ["Noodle", "REGION", "WEST", 80],
             ["Snack", "CHANNEL", "GT", 72],
         ]
-        targets = tes._target_rows_to_dict(target_rows)
+        targets = runner._target_rows_to_dict(target_rows)
 
         with tempfile.TemporaryDirectory() as tmp:
-            output_path = tes.export_summary_excel(
+            output_path = runner.export_summary_excel(
                 self.make_df(),
                 targets,
                 output_dir=tmp,
@@ -548,10 +470,10 @@ class ExcelExportTests(unittest.TestCase):
             ["Noodle", "REGION", "WEST", 80],
             ["Snack", "REGION", "EAST", 55],
         ]
-        targets = tes._target_rows_to_dict(target_rows)
+        targets = runner._target_rows_to_dict(target_rows)
 
         with tempfile.TemporaryDirectory() as tmp:
-            output_path = tes.export_summary_excel(
+            output_path = runner.export_summary_excel(
                 self.make_df(),
                 targets,
                 output_dir=tmp,
@@ -599,7 +521,7 @@ class ExcelExportTests(unittest.TestCase):
         ], ignore_index=True)
 
         with tempfile.TemporaryDirectory() as tmp:
-            output_path = tes.export_summary_excel(
+            output_path = runner.export_summary_excel(
                 df,
                 {("REGION", "WEST"): 70},
                 output_dir=tmp,
@@ -610,7 +532,7 @@ class ExcelExportTests(unittest.TestCase):
         category_charts = [chart for chart in ws._charts if " - " in str(chart.title)]
         anchors = sorted(chart.anchor._from.row for chart in category_charts)
         self.assertGreaterEqual(len(category_charts), 2)
-        self.assertGreaterEqual(anchors[1] - anchors[0], tes.EXCEL_CATEGORY_CHART_ROW_STEP - 1)
+        self.assertGreaterEqual(anchors[1] - anchors[0], runner.EXCEL_CATEGORY_CHART_ROW_STEP - 1)
         self.assertTrue(all(chart.dLbls and chart.dLbls.showVal for chart in category_charts))
         self.assertTrue(all(chart.x_axis.delete is False for chart in category_charts))
         self.assertTrue(all(chart.x_axis.tickLblPos == "low" for chart in category_charts))
@@ -830,7 +752,7 @@ class ExcelExportTests(unittest.TestCase):
         from unittest.mock import patch
         with patch('openpyxl.Workbook.save', mock_save):
             with tempfile.TemporaryDirectory() as tmp:
-                tes.export_summary_excel(
+                runner.export_summary_excel(
                     df,
                     {("REGION", "WEST"): 70},
                     output_dir=tmp,
@@ -875,7 +797,7 @@ class ExcelExportTests(unittest.TestCase):
         self.assertTrue(bag_noodle_charts[1].anchor.startswith('K'))
 
     def test_export_summary_excel_has_no_vba_dependency_or_macro_output(self):
-        with open("tes.py", encoding="utf-8") as f:
+        with open("runner.py", encoding="utf-8") as f:
             source = f.read()
 
         self.assertNotIn("win32com", source)
@@ -884,26 +806,6 @@ class ExcelExportTests(unittest.TestCase):
         self.assertNotIn("Workbook_Open", source)
         self.assertNotIn("add_vba_to_workbook", source)
         self.assertNotIn("enable_vba", source)
-
-    def test_proses_data_exports_summary_xlsx_from_embedded_targets(self):
-        original_cwd = os.getcwd()
-        original_baca_semua_csv = tes.baca_semua_csv
-        with tempfile.TemporaryDirectory() as tmp:
-            try:
-                os.chdir(tmp)
-                tes.baca_semua_csv = self.make_df
-
-                tes.proses_data()
-
-                expected_name = f"Summary SOS_{os.path.basename(tmp)}.xlsx"
-                output_path = os.path.join(tmp, expected_name)
-                self.assertTrue(os.path.exists(output_path))
-                self.assertFalse(os.path.exists(f"Summary SOS_{os.path.basename(tmp)}.xlsm"))
-                self.assertEqual(load_workbook(output_path).sheetnames, ["Noodle", "Snack", "TARGETS", "VALIDATION REPORT"])
-            finally:
-                tes.baca_semua_csv = original_baca_semua_csv
-                os.chdir(original_cwd)
-
 
 class StoreDetailExportTests(unittest.TestCase):
     def make_df(self):
@@ -949,7 +851,7 @@ class StoreDetailExportTests(unittest.TestCase):
     def test_export_store_detail_creates_correct_structure(self):
         with tempfile.TemporaryDirectory() as tmp:
             df = self.make_df()
-            output_path = tes.export_store_detail_excel(df, output_dir=tmp, cluster_name="TestCluster")
+            output_path = runner.export_store_detail_excel(df, output_dir=tmp, cluster_name="TestCluster")
             
             self.assertTrue(os.path.exists(output_path))
             self.assertTrue(output_path.endswith("Store Detail_TestCluster.xlsx"))
@@ -978,59 +880,7 @@ class StoreDetailExportTests(unittest.TestCase):
                 ['WEST', 'BANDUNG', 'GT', 'RETAIL', '1001', 'TOKO A', 0.25, 1.0]
             )
 
-class StoreDetailTests(unittest.TestCase):
-    def test_period_is_pivot_axis_not_left_identity_column(self):
-        df = dataframe_with_produsen([
-            {
-                "Period": "Jan 25",
-                "Visit Date": pd.Timestamp("2025-01-02"),
-                "Week": "W1",
-                "Region": "WEST",
-                "Area": "BANDUNG",
-                "Channel": "MT",
-                "Account": "ACC",
-                "Store Code": "S001",
-                "Store Name": "Store One",
-                "Username": "user1",
-                "Full Name": "User One",
-                "Product Code": "SKU001",
-                "Facing": 10,
-            },
-            {
-                "Period": "Jan 25",
-                "Visit Date": pd.Timestamp("2025-01-02"),
-                "Week": "W1",
-                "Region": "WEST",
-                "Area": "BANDUNG",
-                "Channel": "MT",
-                "Account": "ACC",
-                "Store Code": "S001",
-                "Store Name": "Store One",
-                "Username": "user1",
-                "Full Name": "User One",
-                "Product Code": "COMPETITOR SKU",
-                "Facing": 5,
-            },
-        ])
-        ws = FakeWorksheet()
-
-        tes.buat_store_detail(ws, df)
-
-        header1 = ws.updated_values[0]
-        self.assertEqual(header1[:3], ["Region", "Area", "Store Name"])
-        self.assertNotIn("Period", header1[:3])
-        self.assertIn("Jan 25", header1)
-        self.assertEqual(ws.frozen, (2, 3))
-
-
 class DashboardDivisionAwareTests(unittest.TestCase):
-    def setUp(self):
-        self._orig_sleep = tes.time.sleep
-        tes.time.sleep = lambda _seconds: None
-
-    def tearDown(self):
-        tes.time.sleep = self._orig_sleep
-
     def make_dashboard_df(self):
         return dataframe_with_produsen([
             {
@@ -1115,7 +965,7 @@ class DashboardDivisionAwareTests(unittest.TestCase):
             },
         ])
 
-        rows, meta = tes.buat_tabel_sos_monthly(
+        rows, meta = runner.buat_tabel_sos_monthly(
             df,
             ["Source Division", "Region"],
             "REGION",
@@ -1171,7 +1021,7 @@ class DashboardDivisionAwareTests(unittest.TestCase):
             },
         ])
 
-        rows, meta = tes.buat_tabel_channel_account(
+        rows, meta = runner.buat_tabel_channel_account(
             df,
             ["Jan 25"],
             {("CHANNEL-ACCOUNT", "MT - ALPHA"): 65},
@@ -1184,104 +1034,6 @@ class DashboardDivisionAwareTests(unittest.TestCase):
         self.assertIn(["Snack", "MT TOTAL", "", "", 3, 7, 10, 30.0], rows)
         self.assertEqual(meta["target_col_idx"], 3)
         self.assertEqual(meta["sos_col_indices"], [7])
-
-    def test_dashboard_region_section_uses_division_dimension_when_available(self):
-        df = self.make_dashboard_df()
-        ws = FakeWorksheet()
-
-        tes.buat_dashboard(ws, df)
-
-        title_idx = ws.updated_values.index(["SOS% BY REGION"])
-        self.assertEqual(
-            ws.updated_values[title_idx + 1][:3],
-            ["DIVISION", "Region", "TARGET"],
-        )
-
-        titles = [row[0] for row in ws.updated_values if row]
-        self.assertNotIn("SOS% BY REGION x DIVISI", titles)
-        self.assertNotIn("SOS% BY ACCOUNT x DIVISI", titles)
-        self.assertNotIn("SOS% BY CATEGORY BY DIVISI", titles)
-
-    def test_dashboard_all_mode_preserves_selector_and_shows_full_division_summary(self):
-        ws = FakeWorksheet(b1_value="ALL")
-
-        tes.buat_dashboard(ws, self.make_dashboard_df())
-
-        self.assertFalse(ws.cleared)
-        self.assertIn(["A2:ZZZ"], ws.batch_clears)
-        self.assertEqual(ws.updated_values[0], ["DIVISION", "ALL"])
-        self.assertEqual(ws.updated_values[2], ["DIVISION SUMMARY"])
-        self.assertIn(["Noodle", 75.0], ws.updated_values)
-        self.assertIn(["Snack", 25.0], ws.updated_values)
-
-    def test_dashboard_single_division_mode_keeps_all_rows_for_apps_script_filter(self):
-        ws = FakeWorksheet(b1_value="Noodle")
-
-        tes.buat_dashboard(ws, self.make_dashboard_df())
-
-        self.assertEqual(ws.updated_values[0], ["DIVISION", "Noodle"])
-        self.assertIn(["Noodle", 75.0], ws.updated_values)
-        self.assertIn(["Snack", 25.0], ws.updated_values)
-
-        region_title = ws.updated_values.index(["SOS% BY REGION"])
-        next_title = ws.updated_values.index(["SOS% BY CHANNEL"])
-        region_rows = ws.updated_values[region_title:next_title]
-        self.assertIn(["Noodle", "WEST", 65.0, 30, 10, 40, 75.0], region_rows)
-        self.assertIn(["Snack", "EAST", 65.0, 10, 30, 40, 25.0], region_rows)
-
-    def test_dashboard_invalid_division_selector_falls_back_to_all(self):
-        ws = FakeWorksheet(b1_value="Bad Division")
-
-        tes.buat_dashboard(ws, self.make_dashboard_df())
-
-        self.assertEqual(ws.updated_values[0], ["DIVISION", "ALL"])
-        region_title = ws.updated_values.index(["SOS% BY REGION"])
-        next_title = ws.updated_values.index(["SOS% BY CHANNEL"])
-        region_rows = ws.updated_values[region_title:next_title]
-        self.assertIn(["Noodle", "WEST", 65.0, 30, 10, 40, 75.0], region_rows)
-        self.assertIn(["Snack", "EAST", 65.0, 10, 30, 40, 25.0], region_rows)
-
-    def chart_requests_from(self, ws):
-        chart_requests = []
-        for args, _kwargs in ws.spreadsheet.batch_updates:
-            if args and isinstance(args[0], dict):
-                chart_requests.extend([
-                    r for r in args[0].get("requests", [])
-                    if "addChart" in r
-                ])
-        return chart_requests
-
-    def test_dashboard_all_mode_creates_division_summary_chart(self):
-        ws = FakeWorksheet(b1_value="ALL")
-
-        tes.buat_dashboard(ws, self.make_dashboard_df())
-
-        chart_requests = self.chart_requests_from(ws)
-        titles = [
-            r["addChart"]["chart"]["spec"].get("title")
-            for r in chart_requests
-        ]
-        self.assertEqual(titles, ["DIVISION SUMMARY"])
-        row_index = chart_requests[0]["addChart"]["chart"]["position"]["overlayPosition"]["anchorCell"]["rowIndex"]
-        self.assertGreaterEqual(row_index, len(ws.updated_values))
-
-    def test_dashboard_selected_division_reuses_category_by_divisi_chart(self):
-        ws = FakeWorksheet(b1_value="Noodle")
-
-        tes.buat_dashboard(ws, self.make_dashboard_df())
-
-        chart_requests = self.chart_requests_from(ws)
-        titles = [
-            r["addChart"]["chart"]["spec"].get("title", "")
-            for r in chart_requests
-        ]
-        self.assertTrue(any("BAG NOODLE" in title for title in titles))
-        self.assertNotIn("DIVISION SUMMARY", titles)
-        row_indexes = [
-            r["addChart"]["chart"]["position"]["overlayPosition"]["anchorCell"]["rowIndex"]
-            for r in chart_requests
-        ]
-        self.assertTrue(all(row_index >= len(ws.updated_values) for row_index in row_indexes))
 
     def test_single_division_skips_division_subtotal_row(self):
         """When data has only 1 division, [Divisi] TOTAL row should NOT appear."""
@@ -1302,7 +1054,7 @@ class DashboardDivisionAwareTests(unittest.TestCase):
             },
         ])
 
-        rows, meta = tes.buat_tabel_sos_monthly(
+        rows, meta = runner.buat_tabel_sos_monthly(
             df,
             ["Source Division", "Region"],
             "REGION",
@@ -1347,7 +1099,7 @@ class DashboardDivisionAwareTests(unittest.TestCase):
             },
         ])
 
-        rows, meta = tes.buat_tabel_sos_monthly(
+        rows, meta = runner.buat_tabel_sos_monthly(
             df,
             ["Source Division", "Region"],
             "REGION",
@@ -1364,7 +1116,7 @@ class DashboardDivisionAwareTests(unittest.TestCase):
         """Per-division Excel sheets should not contain [Divisi] TOTAL rows."""
         df = self.make_dashboard_df()
         with tempfile.TemporaryDirectory() as tmp:
-            output_path = tes.export_summary_excel(
+            output_path = runner.export_summary_excel(
                 df,
                 {("REGION", "WEST"): 70},
                 output_dir=tmp,
@@ -1394,7 +1146,7 @@ class DashboardDivisionAwareTests(unittest.TestCase):
         header = ['Division', 'Dimension', 'Name', 'Target']
         initial_rows = [header, ['Noodle', 'REGION', 'DEFAULT', 65.0]]
 
-        enriched = tes._enrich_targets_with_df_values(df, initial_rows)
+        enriched = runner._enrich_targets_with_df_values(df, initial_rows)
 
         enriched_names = [
             (str(row[0]), str(row[1]), str(row[2]))
@@ -1413,7 +1165,7 @@ class DashboardDivisionAwareTests(unittest.TestCase):
         """TARGETS sheet in Excel output should have GRAND TOTAL rows."""
         df = self.make_dashboard_df()
         with tempfile.TemporaryDirectory() as tmp:
-            output_path = tes.export_summary_excel(
+            output_path = runner.export_summary_excel(
                 df,
                 {("REGION", "WEST"): 70},
                 output_dir=tmp,

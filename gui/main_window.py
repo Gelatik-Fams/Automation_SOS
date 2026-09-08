@@ -243,7 +243,7 @@ class MainWindow(ctk.CTk):
 
     def _run_engine_worker(self):
         sys.path.insert(0, str(BASE_DIR))
-        import tes  # noqa: engine import
+        import runner  # noqa: engine import
 
         orig_dir = os.getcwd()
         try:
@@ -267,11 +267,11 @@ class MainWindow(ctk.CTk):
                 try:
                     os.chdir(cluster_dir)
 
-                    summary_path = tes.get_summary_output_path('.', cluster_name=cluster_name, extension='.xlsx')
-                    targets_local, target_rows = tes.load_or_create_summary_targets(summary_path)
+                    summary_path = runner.get_summary_output_path('.', cluster_name=cluster_name, extension='.xlsx')
+                    targets_local, target_rows = runner.load_or_create_summary_targets(summary_path)
                     self._q_progress(base_prog + step * 0.1)
 
-                    df_raw = tes.baca_semua_csv()
+                    df_raw = runner.baca_semua_csv()
                     if df_raw is None or df_raw.empty:
                         raise ValueError(f'Tidak ada data CSV di {cluster_name}')
                     csv_count = df_raw.attrs.get('physical_csv_lines', len(df_raw))
@@ -279,7 +279,7 @@ class MainWindow(ctk.CTk):
                     logger.info(f'Cluster {cluster_name} — {csv_count:,} baris fisik CSV terdeteksi')
                     self._q_progress(base_prog + step * 0.30)
 
-                    df, removed = tes.validasi_data(df_raw)
+                    df, removed = runner.validasi_data(df_raw)
                     if len(removed):
                         self._q_log(f'[INFO] {len(removed):,} duplikat dihapus')
                         logger.info(f'Cluster {cluster_name} — {len(removed):,} duplikat dihapus')
@@ -288,13 +288,13 @@ class MainWindow(ctk.CTk):
                         logger.info(f'Cluster {cluster_name} — tidak ada duplikat')
                     self._q_progress(base_prog + step * 0.50)
 
-                    target_rows = tes._enrich_targets_with_df_values(df, target_rows)
+                    target_rows = runner._enrich_targets_with_df_values(df, target_rows)
                     if target_rows is not None:
-                        targets_local = tes._target_rows_to_dict(target_rows)
+                        targets_local = runner._target_rows_to_dict(target_rows)
                     self._q_progress(base_prog + step * 0.65)
 
                     self._q_log(f'[INFO] Membuat Summary SOS_{cluster_name}.xlsx…')
-                    output_path = tes.export_summary_excel(
+                    output_path = runner.export_summary_excel(
                         df, targets_local, output_dir='.', cluster_name=cluster_name,
                         target_rows=target_rows, df_removed=removed,
                     )
@@ -312,7 +312,7 @@ class MainWindow(ctk.CTk):
                     self._q_log(f'[OK] {os.path.basename(output_path)} ({size_kb:.0f} KB)')
                     
                     self._q_log(f'[INFO] Membuat Store Detail_{cluster_name}.xlsx…')
-                    output_detail_path = tes.export_store_detail_excel(
+                    output_detail_path = runner.export_store_detail_excel(
                         df, output_dir='.', cluster_name=cluster_name
                     )
                     
