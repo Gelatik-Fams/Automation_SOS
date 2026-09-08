@@ -41,7 +41,7 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='Automation',
+    name='SOS Dashboard Automation',
 )
 app = BUNDLE(
     coll,

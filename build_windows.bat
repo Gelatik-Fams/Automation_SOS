@@ -5,7 +5,7 @@
 echo === Gelatik Automation Build ===
 echo.
 
-tasklist /FI "IMAGENAME eq Automation.exe" | find /I "Automation.exe" >nul
+tasklist /FI "IMAGENAME eq Automation.exe" | %SystemRoot%\System32\findstr.exe /I "Automation.exe" >nul
 if not errorlevel 1 (
     echo ERROR: Automation.exe masih berjalan.
     echo Tutup aplikasi Automation dulu, lalu jalankan build_windows.bat lagi.
@@ -23,17 +23,15 @@ if exist build rmdir /s /q build
 python -m PyInstaller Automation.spec --clean
 
 echo.
-if exist dist\Automation\Automation.exe (
-    echo BUILD SUCCESS: dist\Automation\Automation.exe
+set "RELEASE=dist\SOS Dashboard Automation"
+if exist "%RELEASE%\Automation.exe" (
+    echo BUILD SUCCESS: %RELEASE%\Automation.exe
 ) else (
     echo BUILD FAILED
     exit /b 1
 )
 
-:: Create release folder
-set RELEASE=dist\SOS Dashboard Automation
-if exist "%RELEASE%" rmdir /s /q "%RELEASE%"
-xcopy /E /I /Y "dist\Automation" "%RELEASE%"
+:: Add release files directly to the PyInstaller output folder
 copy config.json "%RELEASE%\"
 copy README.md "%RELEASE%\"
 if not exist "%RELEASE%\logs" mkdir "%RELEASE%\logs"
